@@ -7,7 +7,7 @@ from urllib.parse import urlparse, parse_qs
 
 import aiohttp
 
-from bot.utils.job_worker import USER_AGENT
+USER_AGENT = "IEEE-CS-UCF-Bot (+https://github.com/IEEECS-UCF/ieee-cs-bot)"
 
 RAW = "https://raw.githubusercontent.com"
 
@@ -55,7 +55,45 @@ COMPANY_BOARDS = [
     ("lever", "hermeus", "Hermeus", "hermeus.com"),
 ]
 
-WORKER_TIMEOUT = 300
+# Workday career sites: (tenant, wd host number, site, company name, website domain)
+# Read through the JSON endpoint behind each site's public job search; it isn't an official API.
+WORKDAY_SITES = [
+    ("nvidia", "wd5", "NVIDIAExternalCareerSite", "NVIDIA", "nvidia.com"),
+    ("intel", "wd1", "External", "Intel", "intel.com"),
+    ("globalhr", "wd5", "rec_rtx_ext_gateway", "RTX", "rtx.com"),
+    ("ngc", "wd1", "Northrop_Grumman_External_Site", "Northrop Grumman", "northropgrumman.com"),
+    ("marvell", "wd1", "MarvellCareers", "Marvell", "marvell.com"),
+    ("boeing", "wd1", "EXTERNAL_CAREERS", "The Boeing Company", "boeing.com"),
+    ("hpe", "wd5", "jobsathpe", "Hewlett Packard Enterprise", "hpe.com"),
+    ("kla", "wd1", "Search", "KLA", "kla.com"),
+    ("micron", "wd1", "External", "Micron Technology", "micron.com"),
+    ("altera", "wd1", "altera", "Altera", "altera.com"),
+    ("ciena", "wd5", "Careers", "Ciena", "ciena.com"),
+    ("cadence", "wd1", "External_Careers", "Cadence Design Systems", "cadence.com"),
+    ("aptiv", "wd5", "aptiv_careers", "Aptiv", "aptiv.com"),
+    ("amat", "wd1", "External", "Applied Materials", "appliedmaterials.com"),
+    ("nxp", "wd3", "careers", "NXP Semiconductors", "nxp.com"),
+    ("rockwellautomation", "wd1", "External_Rockwell_Automation", "Rockwell Automation", "rockwellautomation.com"),
+    ("leidos", "wd5", "External", "Leidos", "leidos.com"),
+    ("analogdevices", "wd1", "External", "Analog Devices", "analog.com"),
+    ("avav", "wd1", "avav", "AeroVironment", "avinc.com"),
+    ("motorolasolutions", "wd5", "Careers", "Motorola", "motorolasolutions.com"),
+    ("lumentum", "wd5", "LITE", "Lumentum", "lumentum.com"),
+    ("generalmotors", "wd5", "Careers_GM", "General Motors", "gm.com"),
+    ("ambarella", "wd108", "ambarella", "Ambarella", "ambarella.com"),
+    ("draper", "wd5", "Draper_Careers", "Draper", "draper.com"),
+    ("cisco", "wd5", "cisco_careers", "Cisco", "cisco.com"),
+    ("globalfoundries", "wd1", "External", "GlobalFoundries", "gf.com"),
+    ("selinc", "wd1", "SEL", "Schweitzer Engineering Laboratories", "selinc.com"),
+    ("blueorigin", "wd5", "blueorigin", "Blue Origin", "blueorigin.com"),
+    ("bb", "wd3", "QNX", "Blackberry", "blackberry.com"),
+    ("caci", "wd1", "external", "CACI", "caci.com"),
+    ("kbr", "wd5", "KBR_Careers", "KBR", "kbr.com"),
+    ("pae", "wd1", "amentum_careers", "Amentum", "amentum.com"),
+    ("cae", "wd3", "career", "CAE", "cae.com"),
+]
+
+WORKER_TIMEOUT = 600
 
 _META_TAG = re.compile(r'<meta\s[^>]*>', re.I)
 _ATTR = re.compile(r'(\w[\w:-]*)="([^"]*)"')

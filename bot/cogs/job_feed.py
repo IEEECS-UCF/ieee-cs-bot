@@ -9,13 +9,17 @@ from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import discord
 from discord.ext import commands, tasks
-from bot.utils.job_listings import GITHUB_LISTS, COMPANY_BOARDS, new_session, run_worker, fetch_company_logo
+from bot.utils.job_listings import (
+    GITHUB_LISTS, USER_AGENT, COMPANY_BOARDS, WORKDAY_SITES, new_session, run_worker, fetch_company_logo,
+)
+from bot.utils.job_worker import classify_location, US_CANADA_COUNTRIES
 from bot.utils.formatting import create_base_embed, IEEE_BLUE
 
 ORG_NAME = "IEEE CS"
 STATE_FILE = "data/jobs_state.json"
 CHECK_MINUTES = 30
 BOARD_CHECK_MINUTES = 120     # company boards change slowly; be gentle with them
+WORKDAY_CHECK_MINUTES = 360   # Workday sites take many requests each
 MAX_AGE_DAYS = 30             # only roles posted within this window are announced
 POST_DELAY_SECONDS = 1        # Discord allows about one message per second per channel
 REMEMBER_DAYS = 60            # how long to remember roles after they close
@@ -37,7 +41,8 @@ EXCLUDE = r"\b(sales|marketing|recruit\w*|mba|accounting|accountant|finance|lega
 
 # Company boards list every role, so their titles must also say who it's for
 INTERN = r"\b(intern(ship)?s?|co-?op|student)\b"
-NEW_GRAD = r"\b(new grad(uate)?s?|graduate|university|early[- ]career|entry[- ]level|campus|apprentice)\b|\b20\d\d grads?\b"
+# Big employers title new grad roles like "Engineer I", "Associate Firmware Engineer" or "... Development Program"
+NEW_GRAD = r"\b(new grad(uate)?s?|graduate|university|early[- ]career|entry[- ]level|campus|apprentice)\b|\b20\d\d grads?\b|\b(engineer|developer|scientist)\s+(i|1)\b|\bassociate\b.*\b(engineer|scientist|developer)\b|\b(development|rotation(al)?|leadership) program\b"
 SENIOR = r"\b(senior|sr\.?|staff|principal|lead|manager|director|head of)\b"
 
 TOPIC_PATTERNS = {name: re.compile(rx, re.I) for name, rx in TOPICS.items()}
@@ -56,7 +61,10 @@ SPONSORSHIP = {
 # Ignored when comparing names, so "Astera Labs Inc." and "Astera Labs" match
 COMPANY_FILLER = {"inc", "llc", "ltd", "corp", "corporation", "co", "company", "the", "technologies", "technology", "group", "holdings"}
 TITLE_FILLER = {"the", "and", "of", "for", "a", "an", "in", "to", "with", "summer", "fall", "winter", "spring"}
-TITLE_SYNONYMS = {"engineering": "engineer", "internship": "intern", "interns": "intern", "developer": "engineer", "development": "engineer"}
+TITLE_SYNONYMS = {
+    "engineering": "engineer", "internship": "intern", "interns": "intern", "developer": "engineer",
+    "development": "engineer", "i": "1", "ii": "2", "iii": "3",
+}
 TRACKING_PARAMS = ("utm_", "ref", "source", "gh_src", "lever-source")
 
 
@@ -101,7 +109,21 @@ def url_key(url):
     parts = urlparse(url.strip())
     query = [(k, v) for k, v in parse_qsl(parts.query) if not k.lower().startswith(TRACKING_PARAMS)]
     path = re.sub(r"/(apply|application)/?$", "", parts.path).rstrip("/")
+    if parts.netloc.lower().endswith(".myworkdayjobs.com"):
+        # Workday links may carry a locale and vary in case between sources
+        path = re.sub(r"^/[a-z]{2}-[a-z]{2}(?=/)", "", path.lower())
     return urlunparse(("https", parts.netloc.lower(), path, "", urlencode(query), ""))
+
+def us_canada_locations(item):
+    """The listing's locations minus any outside the US and Canada, or None if it's only elsewhere.
+    Locations that don't say where they are ("Remote", "SF") are given the benefit of the doubt."""
+    kinds = [classify_location(l) for l in item['locations']]
+    if item.get('countries'):
+        if not any(c in US_CANADA_COUNTRIES for c in item['countries']):
+            return None
+    elif kinds and all(k == "foreign" for k in kinds):
+        return None
+    return [l for l, k in zip(item['locations'], kinds) if k != "foreign"]
 
 def select_jobs(listings, cutoff):
     """Open, on-topic listings posted since 'cutoff', with duplicates across locations and sources merged."""
@@ -117,6 +139,9 @@ def select_jobs(listings, cutoff):
             continue
         track = item['track'] or infer_track(title)
         if track is None:
+            continue
+        locations = us_canada_locations(item)
+        if locations is None:
             continue
 
         key = dedupe_key(item['company'], title)
@@ -139,7 +164,7 @@ def select_jobs(listings, cutoff):
                 'company_url': item['company_url'],
                 'logo_fallback': item['logo_fallback'],
                 'url': item['url'],
-                'locations': list(item['locations']),
+                'locations': locations,
                 'terms': list(item['terms']),
                 'sponsorship': item['sponsorship'],
                 'degrees': item['degrees'],
@@ -153,7 +178,7 @@ def select_jobs(listings, cutoff):
             role['ids'].append(item['id'])
             if link not in role['urls']:
                 role['urls'].append(link)
-            role['locations'] += [l for l in item['locations'] if l not in role['locations']]
+            role['locations'] += [l for l in locations if l not in role['locations']]
             role['terms'] += [t for t in item['terms'] if t not in role['terms']]
             role['logo_fallback'] = role['logo_fallback'] or item['logo_fallback']
             role['date_posted'] = min(role['date_posted'], item['date_posted'])
@@ -225,7 +250,9 @@ class JobFeed(commands.Cog):
         self.session = None
         self.list_cache = {}    # url -> (etag, recent listings)
         self.board_cache = {}   # slug -> recent listings
+        self.workday_cache = {}  # (tenant, site) -> recent listings
         self.boards_checked = 0
+        self.workday_checked = 0
         self.needs_history_sync = False
         self._lock = asyncio.Lock()
 
@@ -318,8 +345,12 @@ class JobFeed(commands.Cog):
     async def load_listings(self, cutoff):
         """Open listings posted since 'cutoff' from every source. Curated lists come first, so their copy of a role wins."""
         boards_due = not self.boards_checked or time.monotonic() - self.boards_checked >= BOARD_CHECK_MINUTES * 60
+        workday_due = not self.workday_checked or time.monotonic() - self.workday_checked >= WORKDAY_CHECK_MINUTES * 60
         request = {
             'cutoff': cutoff,
+            'user_agent': USER_AGENT,
+            # Boards and Workday list every role; only student ones are worth a closer look
+            'student_filter': {'include': f"{INTERN}|{NEW_GRAD}", 'exclude': SENIOR},
             # Lets the worker drop off-topic listings before they ever reach this process
             'title_filter': {'include': list(TOPICS.values()), 'exclude': EXCLUDE},
             'lists': [
@@ -330,6 +361,10 @@ class JobFeed(commands.Cog):
                 {'ats': ats, 'slug': slug, 'company': company, 'domain': domain}
                 for ats, slug, company, domain in COMPANY_BOARDS
             ] if boards_due else [],
+            'workday': [
+                {'tenant': tenant, 'wd': wd, 'site': site, 'company': company, 'domain': domain}
+                for tenant, wd, site, company, domain in WORKDAY_SITES
+            ] if workday_due else [],
         }
         try:
             result = await run_worker(request)
@@ -342,11 +377,17 @@ class JobFeed(commands.Cog):
             for entry in result['boards']:
                 if entry['listings'] is not None:
                     self.board_cache[entry['slug']] = entry['listings']
+            for entry in result.get('workday', []):
+                if entry['listings'] is not None:
+                    self.workday_cache[(entry['tenant'], entry['site'])] = entry['listings']
             if boards_due:
                 self.boards_checked = time.monotonic()
+            if workday_due:
+                self.workday_checked = time.monotonic()
 
         listings = [job for _, jobs in self.list_cache.values() for job in jobs]
-        return listings + [job for jobs in self.board_cache.values() for job in jobs]
+        listings += [job for jobs in self.board_cache.values() for job in jobs]
+        return listings + [job for jobs in self.workday_cache.values() for job in jobs]
 
     async def run_check(self):
         channel = self.bot.get_channel(self.channel_id)
