@@ -20,7 +20,7 @@ jobs:
       - name: Byte-compile
         run: uv run --locked python -m compileall -q bot
       - name: Import check
-        run: uv run --locked python -c "import bot.main, bot.cogs.calendar_sync, bot.cogs.general, bot.cogs.job_feed"
+        run: uv run --locked python -c "import bot.main, bot.cogs.calendar_sync, bot.cogs.general, bot.cogs.job_feed, bot.utils.job_worker"
 
   deploy:
     needs: check
