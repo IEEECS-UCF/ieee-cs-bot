@@ -15,9 +15,9 @@ class General(commands.Cog):
             description="Connect with us on our platforms!", 
             color=IEEE_BLUE
         )
-        embed.add_field(name="Website", value="[tbd]()", inline=False)
+        embed.add_field(name="Website", value="[csucf](https://csucf.org)", inline=False)
         embed.add_field(name="Instagram", value="[@ieeecsucf](https://instagram.com)", inline=False)
-        embed.add_field(name="Knight Connect", value="[Join Here](https://knightconnect.campuslabs.com/)", inline=False)
+        embed.add_field(name="Knight Connect", value="[IEEE CS](https://knightconnect.campuslabs.com/engage/organization/ieee-cs)", inline=False)
         
         await interaction.response.send_message(embed=embed)
 

@@ -1,0 +1,17 @@
+[project]
+name = "ieee-cs-bot"
+version = "0.1.0"
+description = "IEEE CS UCF Discord bot: mirrors Google Calendar into Discord scheduled events"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4>=4.14.3",
+    "discord.py>=2.7.1",
+    "google-api-python-client>=2.193.0",
+    "google-auth>=2.49.1",
+    "python-dateutil>=2.9.0.post0",
+    "python-dotenv>=1.2.2",
+]
+
+[tool.uv]
+package = false
