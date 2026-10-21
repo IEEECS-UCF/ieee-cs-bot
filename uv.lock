@@ -515,6 +515,7 @@ name = "ieee-cs-bot"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "beautifulsoup4" },
     { name = "discord-py" },
     { name = "google-api-python-client" },
@@ -525,6 +526,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.13.3" },
     { name = "beautifulsoup4", specifier = ">=4.14.3" },
     { name = "discord-py", specifier = ">=2.7.1" },
     { name = "google-api-python-client", specifier = ">=2.193.0" },
