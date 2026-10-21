@@ -23,6 +23,10 @@ WORKDAY_CHECK_MINUTES = 360   # Workday sites take many requests each
 MAX_AGE_DAYS = 30             # only roles posted within this window are announced
 POST_DELAY_SECONDS = 1        # Discord allows about one message per second per channel
 REMEMBER_DAYS = 60            # how long to remember roles after they close
+WATCH_DAYS = 120              # how long posts are checked for their role closing
+CLOSED_PREFIX = "🔒 Closed: "
+CLOSED_TEXT = "🔒 No longer accepting applications."
+CLOSED_COLOR = 0x747F8D
 STATE_VERSION = 2
 
 # Mirrors the Fields of Interest in /info. A listing is posted only if its
@@ -156,6 +160,7 @@ def select_jobs(listings, cutoff):
                 'keys': [key],
                 'ids': [item['id']],
                 'urls': [link],
+                'raw_urls': [item['url']],
                 'source': item['source'],
                 'track': track,
                 'topics': topics,
@@ -178,6 +183,8 @@ def select_jobs(listings, cutoff):
             role['ids'].append(item['id'])
             if link not in role['urls']:
                 role['urls'].append(link)
+            if item['url'] not in role['raw_urls']:
+                role['raw_urls'].append(item['url'])
             role['locations'] += [l for l in locations if l not in role['locations']]
             role['terms'] += [t for t in item['terms'] if t not in role['terms']]
             role['logo_fallback'] = role['logo_fallback'] or item['logo_fallback']
@@ -187,6 +194,13 @@ def select_jobs(listings, cutoff):
 
     unique = {id(r): r for r in roles.values()}
     return list(unique.values())
+
+def merge_into_post(post, role):
+    for field, values in (("ids", role['ids']), ("keys", role['keys']), ("raw_urls", role['raw_urls'])):
+        post[field] += [v for v in values if v not in post[field]]
+
+def is_workday_link(url):
+    return ".myworkdayjobs.com/" in url
 
 def format_locations(locations):
     if not locations:
@@ -254,6 +268,7 @@ class JobFeed(commands.Cog):
         self.boards_checked = 0
         self.workday_checked = 0
         self.needs_history_sync = False
+        self.status_cache = {}  # listing id or job link -> "open" / "closed", as last reported
         self._lock = asyncio.Lock()
 
         os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
@@ -293,6 +308,9 @@ class JobFeed(commands.Cog):
         state.setdefault("posted_keys", {})
         state.setdefault("posted_urls", {})
         state.setdefault("logos", {})
+        # Posts by dedupe key: where each one is, and the ids and links used to tell when its role closes
+        state.setdefault("posts", {})
+        state.setdefault("posts_synced", False)
         return state
 
     def save_state(self):
@@ -365,6 +383,7 @@ class JobFeed(commands.Cog):
                 {'tenant': tenant, 'wd': wd, 'site': site, 'company': company, 'domain': domain}
                 for tenant, wd, site, company, domain in WORKDAY_SITES
             ] if workday_due else [],
+            'watch': self.watch_targets(include_workday=workday_due),
         }
         try:
             result = await run_worker(request)
@@ -380,6 +399,7 @@ class JobFeed(commands.Cog):
             for entry in result.get('workday', []):
                 if entry['listings'] is not None:
                     self.workday_cache[(entry['tenant'], entry['site'])] = entry['listings']
+            self.status_cache.update(result.get('statuses', {}))
             if boards_due:
                 self.boards_checked = time.monotonic()
             if workday_due:
@@ -404,13 +424,19 @@ class JobFeed(commands.Cog):
             await self.sync_from_history(channel, cutoff)
 
         roles = select_jobs(await self.load_listings(cutoff), cutoff)
+        if not self.state["posts_synced"]:
+            await self.sync_posts(channel, roles, now_ts)
 
         by_title = self.posted_by_title()
+        posts = self.post_index()
         new_roles = []
         for role in roles:
             if self.already_posted(role, by_title):
                 # Still open: keep remembering it, along with any new ids or links it picked up
                 self.mark_posted(role, now_ts)
+                post = self.find_post(role, posts)
+                if post:
+                    merge_into_post(post, role)
             else:
                 new_roles.append(role)
         new_roles.sort(key=lambda r: r['date_posted'])
@@ -420,18 +446,139 @@ class JobFeed(commands.Cog):
         for role in new_roles:
             logo = await self.get_logo(role['company_url']) or role['logo_fallback']
             try:
-                await channel.send(embed=build_embed(role, logo))
+                message = await channel.send(embed=build_embed(role, logo))
             except discord.HTTPException as e:
                 print(f"Failed to post job '{role['title']}' at {role['company']}: {e}")
                 continue
             # Save right away so a crash can never cause a double post
             self.mark_posted(role, now_ts)
+            self.track_post(role, message, now_ts)
             self.save_state()
             print(f"Posted job: {role['company']} - {role['title']}")
             await asyncio.sleep(POST_DELAY_SECONDS)
 
+        await self.update_closed(now_ts)
         self.forget_old(now_ts)
         self.save_state()
+
+    # ---------- closed roles ----------
+
+    def watch_targets(self, include_workday):
+        """Ids (and, when Workday is due, Workday links) of every tracked post's role."""
+        ids, urls = set(), set()
+        for post in self.state["posts"].values():
+            ids.update(post["ids"])
+            if include_workday:
+                urls.update(u for u in post["raw_urls"] if is_workday_link(u))
+        return {'ids': sorted(ids), 'workday_urls': sorted(urls)}
+
+    def post_index(self):
+        index = {}
+        for name, post in self.state["posts"].items():
+            for value in post["ids"] + post["keys"] + [url_key(u) for u in post["raw_urls"]]:
+                index[value] = name
+        return index
+
+    def find_post(self, role, index):
+        for value in role['ids'] + role['keys'] + role['urls']:
+            if value in index:
+                return self.state["posts"].get(index[value])
+        return None
+
+    def track_post(self, role, message, now_ts):
+        self.state["posts"][role['keys'][0]] = {
+            "channel": message.channel.id, "message": message.id, "ids": list(role['ids']),
+            "keys": list(role['keys']), "raw_urls": list(role['raw_urls']), "posted": now_ts, "closed": False,
+        }
+
+    async def sync_posts(self, channel, roles, now_ts):
+        """Once: finds the posts already in the channel, so they're marked when their role closes."""
+        roles_by = {}
+        for role in roles:
+            for value in role['urls'] + role['keys']:
+                roles_by[value] = role
+        after = datetime.datetime.fromtimestamp(now_ts - WATCH_DAYS * 86400, datetime.timezone.utc)
+        found = 0
+        try:
+            async for message in channel.history(limit=None, after=after):
+                if message.author.id != self.bot.user.id or not message.embeds:
+                    continue
+                embed = message.embeds[0]
+                if not embed.url or not embed.title or "Job Feed" not in (embed.footer.text or ""):
+                    continue
+                title = embed.title.removeprefix(CLOSED_PREFIX)
+                company = next((f.value for f in embed.fields if f.name == "Company"), "")
+                key = dedupe_key(company, title)
+                post = {
+                    "channel": channel.id, "message": message.id, "ids": [], "keys": [key],
+                    "raw_urls": [embed.url], "posted": int(message.created_at.timestamp()),
+                    "closed": embed.title.startswith(CLOSED_PREFIX),
+                }
+                role = roles_by.get(url_key(embed.url)) or roles_by.get(key)
+                if role:
+                    merge_into_post(post, role)
+                self.state["posts"][key] = post
+                found += 1
+        except discord.HTTPException as e:
+            print(f"Could not read jobs channel history to track posts ({e}); will retry next check.")
+            return
+        self.state["posts_synced"] = True
+        self.save_state()
+        # Have the next check re-read every source in full, so these posts get statuses right away
+        self.list_cache = {url: (None, jobs) for url, (_, jobs) in self.list_cache.items()}
+        self.boards_checked = self.workday_checked = 0
+        print(f"Job feed: tracking {found} existing post(s) for closing.")
+
+    def post_status(self, post):
+        """A role's company site outranks the aggregator lists when they disagree;
+        within each, any source still showing the role open keeps it open."""
+        direct = [self.status_cache.get(i) for i in post["ids"] if ":" in i]
+        direct += [self.status_cache.get(u) for u in post["raw_urls"] if is_workday_link(u)]
+        listed = [self.status_cache.get(i) for i in post["ids"] if ":" not in i]
+        for statuses in (direct, listed):
+            if "open" in statuses:
+                return "open"
+            if "closed" in statuses:
+                return "closed"
+        return None
+
+    async def update_closed(self, now_ts):
+        for name, post in list(self.state["posts"].items()):
+            status = self.post_status(post)
+            if status is None or (status == "closed") == post["closed"]:
+                continue
+            if await self.set_closed(name, post, status == "closed"):
+                self.save_state()
+                await asyncio.sleep(POST_DELAY_SECONDS)
+        cutoff = now_ts - WATCH_DAYS * 86400
+        self.state["posts"] = {n: p for n, p in self.state["posts"].items() if p["posted"] >= cutoff}
+
+    async def set_closed(self, name, post, closed):
+        """Edits a post to show its role closed (or reopened). Returns whether it changed."""
+        try:
+            channel = self.bot.get_channel(post["channel"]) or await self.bot.fetch_channel(post["channel"])
+            message = await channel.fetch_message(post["message"])
+            embed = message.embeds[0]
+            title = (embed.title or "").removeprefix(CLOSED_PREFIX)
+            if closed:
+                embed.title = (CLOSED_PREFIX + title)[:256]
+                embed.description = CLOSED_TEXT
+                embed.color = CLOSED_COLOR
+            else:
+                embed.title = title
+                embed.description = f"[Apply here]({embed.url})"
+                embed.color = IEEE_BLUE
+            await message.edit(embed=embed)
+        except discord.NotFound:
+            # The post was deleted; nothing left to update
+            self.state["posts"].pop(name, None)
+            return False
+        except (discord.HTTPException, IndexError) as e:
+            print(f"Could not update the post for {name}: {e}")
+            return False
+        post["closed"] = closed
+        print(f"Marked job {'closed' if closed else 'reopened'}: {title}")
+        return True
 
     async def sync_from_history(self, channel, cutoff):
         """Marks the jobs this bot has already posted in the channel, so a lost or

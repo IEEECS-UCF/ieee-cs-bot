@@ -10,9 +10,12 @@ Request: {"cutoff": ts, "user_agent": str,
           "title_filter": {include: [regex], exclude: regex, companies: regex, company_titles: regex},
           "student_filter": {include: regex, exclude: regex},
           "lists": [{source, track, url, etag}], "boards": [{ats, slug, company, domain}],
-          "workday": [{tenant, wd, site, company, domain}]}
-Result:  {"lists": [{url, etag, listings}], "boards": [{slug, listings}], "workday": [{tenant, site, listings}]}
+          "workday": [{tenant, wd, site, company, domain}],
+          "watch": {ids: [listing ids], workday_urls: [job links]}}
+Result:  {"lists": [{url, etag, listings}], "boards": [{slug, listings}], "workday": [{tenant, site, listings}],
+          "statuses": {listing id or job link: "open" | "closed"}}
 A null "listings" means unchanged (lists only) or failed; the caller keeps what it had.
+"statuses" covers the watched ids and links whose state this run could tell.
 
 This file is shared as-is between the IEEE CS and EMBS bots.
 """
@@ -45,6 +48,9 @@ WORKDAY_MAX_PAGES = 15
 WORKDAY_STUDENT_TYPES = re.compile(r"intern|co-?op|apprentice|college|graduate|student|early", re.I)
 WORKDAY_ENGINEERING_FAMILIES = re.compile(r"engineer|r&d|research|technolog|software|hardware|quality|raqa|regulatory|science|product development|data", re.I)
 _WORKDAY_POSTED = re.compile(r"posted (today|yesterday|(\d+)\+? days? ago)", re.I)
+_WORKDAY_JOB_URL = re.compile(
+    r"^https?://(([a-z0-9-]+)\.wd\d+\.myworkdayjobs\.com)/(?:[a-z]{2}-[a-z]{2}/)?([^/?#]+)(/job/[^?#]+)", re.I
+)
 
 
 # ---------- locations ----------
@@ -222,16 +228,22 @@ def parse_github_list(data, source, track, cutoff):
         ))
     return listings
 
-def load_list(spec, cutoff, keep):
+def load_list(spec, cutoff, keep, watched):
     try:
         raw, etag = http_get(spec['url'], spec.get('etag'))
         if raw is None:
-            return {'url': spec['url'], 'etag': etag, 'listings': None}
-        listings = parse_github_list(json.loads(raw), spec['source'], spec['track'], cutoff)
-        return {'url': spec['url'], 'etag': etag, 'listings': [l for l in listings if keep(l['title'], l['company'])]}
+            return {'url': spec['url'], 'etag': etag, 'listings': None, 'statuses': {}}
+        data = json.loads(raw)
+        statuses = {
+            item['id']: "open" if item.get('active') and item.get('is_visible', True) else "closed"
+            for item in data if item.get('id') in watched
+        }
+        listings = parse_github_list(data, spec['source'], spec['track'], cutoff)
+        return {'url': spec['url'], 'etag': etag, 'statuses': statuses,
+                'listings': [l for l in listings if keep(l['title'], l['company'])]}
     except Exception as e:
         print(f"Failed to load {spec['source']} {spec['track']} listings: {e}", file=sys.stderr)
-        return {'url': spec['url'], 'etag': spec.get('etag'), 'listings': None}
+        return {'url': spec['url'], 'etag': spec.get('etag'), 'listings': None, 'statuses': {}}
 
 
 # ---------- company boards ----------
@@ -274,15 +286,25 @@ def parse_board(data, ats, slug, company, domain, cutoff):
         date_posted=posted,
     ) for job_id, title, job_url, locations, posted in jobs if posted >= cutoff]
 
-def load_board(spec, cutoff, keep, is_student):
+def board_job_ids(data, ats, slug):
+    """Ids of every job a board lists as open."""
+    jobs = data if ats == "lever" else data.get("jobs", [])
+    return {f"{ats}:{slug}:{j['id']}" for j in jobs if j.get("isListed", True)}
+
+def load_board(spec, cutoff, keep, is_student, watched):
     try:
         raw, _ = http_get(BOARD_URLS[spec['ats']].format(slug=spec['slug']))
-        listings = parse_board(json.loads(raw), spec['ats'], spec['slug'], spec['company'], spec['domain'], cutoff)
+        data = json.loads(raw)
+        # A board lists all of its open jobs, so a watched job that's missing has closed
+        prefix = f"{spec['ats']}:{spec['slug']}:"
+        open_ids = board_job_ids(data, spec['ats'], spec['slug'])
+        statuses = {i: "open" if i in open_ids else "closed" for i in watched if i.startswith(prefix)}
+        listings = parse_board(data, spec['ats'], spec['slug'], spec['company'], spec['domain'], cutoff)
         listings = [l for l in listings if is_student(l['title']) and keep(l['title'], l['company'])]
-        return {'slug': spec['slug'], 'listings': listings}
+        return {'slug': spec['slug'], 'listings': listings, 'statuses': statuses}
     except Exception as e:
         print(f"Failed to load {spec['company']} job board: {e}", file=sys.stderr)
-        return {'slug': spec['slug'], 'listings': None}
+        return {'slug': spec['slug'], 'listings': None, 'statuses': {}}
 
 
 # ---------- Workday ----------
@@ -396,6 +418,28 @@ def load_workday(spec, cutoff, keep, is_student):
         return {'tenant': spec['tenant'], 'site': spec['site'], 'listings': None}
 
 
+def workday_status(url):
+    """Whether a Workday job is still up: "open", "closed", or None if that couldn't be told."""
+    m = _WORKDAY_JOB_URL.match(url)
+    if not m:
+        return None
+    host, tenant, site, path = m.groups()
+    try:
+        info = http_json(f"https://{host}/wday/cxs/{tenant}/{site}{path}").get("jobPostingInfo")
+    except urllib.error.HTTPError as e:
+        # Taken-down postings answer 404, or 403 with Workday's "S22" error
+        if e.code in (404, 410):
+            return "closed"
+        if e.code == 403 and b"S22" in e.read():
+            return "closed"
+        return None
+    except Exception:
+        return None
+    if not info:
+        return "closed"
+    return "closed" if info.get("canApply") is False else "open"
+
+
 def main():
     global USER_AGENT
     request = json.load(sys.stdin)
@@ -403,11 +447,20 @@ def main():
     cutoff = request.get('cutoff', 0)
     keep = title_filter(request.get('title_filter'))
     is_student = student_filter(request.get('student_filter'))
-    lists = [load_list(spec, cutoff, keep) for spec in request.get('lists', [])]
+    watched = set((request.get('watch') or {}).get('ids') or [])
+    workday_urls = (request.get('watch') or {}).get('workday_urls') or []
+
+    lists = [load_list(spec, cutoff, keep, watched) for spec in request.get('lists', [])]
     with ThreadPoolExecutor(max_workers=4) as pool:
-        boards = list(pool.map(lambda spec: load_board(spec, cutoff, keep, is_student), request.get('boards', [])))
+        boards = list(pool.map(lambda spec: load_board(spec, cutoff, keep, is_student, watched), request.get('boards', [])))
         workday = list(pool.map(lambda spec: load_workday(spec, cutoff, keep, is_student), request.get('workday', [])))
-    json.dump({'lists': lists, 'boards': boards, 'workday': workday}, sys.stdout)
+        workday_statuses = dict(zip(workday_urls, pool.map(workday_status, workday_urls)))
+
+    statuses = {}
+    for entry in lists + boards:
+        statuses.update(entry.pop('statuses', {}))
+    statuses.update({url: status for url, status in workday_statuses.items() if status})
+    json.dump({'lists': lists, 'boards': boards, 'workday': workday, 'statuses': statuses}, sys.stdout)
 
 
 if __name__ == '__main__':
