@@ -21,6 +21,7 @@ import sys
 import json
 import time
 import datetime
+import http.client
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -117,7 +118,8 @@ def http_get(url, etag=None):
         raise
 
 def http_json(url, body=None, attempts=3):
-    """Workday slows down bursts of requests, so timeouts and server errors are retried with backoff."""
+    """Workday slows down bursts of requests, so timeouts, dropped connections and server errors
+    are retried with backoff."""
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
     data = None
     if body is not None:
@@ -131,7 +133,7 @@ def http_json(url, body=None, attempts=3):
         except urllib.error.HTTPError as e:
             if e.code not in (429, 500, 502, 503, 504) or attempt == attempts - 1:
                 raise
-        except (urllib.error.URLError, TimeoutError):
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException):
             if attempt == attempts - 1:
                 raise
         time.sleep(3 * (attempt + 1))
