@@ -11,7 +11,7 @@ Request: {"cutoff": ts, "user_agent": str,
           "student_filter": {include: regex, exclude: regex},
           "lists": [{source, track, url, etag}], "boards": [{ats, slug, company, domain}],
           "workday": [{tenant, wd, site, company, domain}],
-          "watch": {ids: [listing ids], workday_urls: [job links]}}
+          "watch": {ids: [listing ids], urls: [job links], workday_urls: [job links]}}
 Result:  {"lists": [{url, etag, listings}], "boards": [{slug, listings}], "workday": [{tenant, site, listings}],
           "statuses": {listing id or job link: "open" | "closed"}}
 A null "listings" means unchanged (lists only) or failed; the caller keeps what it had.
@@ -228,16 +228,18 @@ def parse_github_list(data, source, track, cutoff):
         ))
     return listings
 
-def load_list(spec, cutoff, keep, watched):
+def load_list(spec, cutoff, keep, watched, watched_urls=frozenset()):
     try:
         raw, etag = http_get(spec['url'], spec.get('etag'))
         if raw is None:
             return {'url': spec['url'], 'etag': etag, 'listings': None, 'statuses': {}}
         data = json.loads(raw)
-        statuses = {
-            item['id']: "open" if item.get('active') and item.get('is_visible', True) else "closed"
-            for item in data if item.get('id') in watched
-        }
+        statuses = {}
+        for item in data:
+            # Watched by id, or by link for posts whose role couldn't be matched to an id
+            key = item.get('id') if item.get('id') in watched else item.get('url') if item.get('url') in watched_urls else None
+            if key:
+                statuses[key] = "open" if item.get('active') and item.get('is_visible', True) else "closed"
         listings = parse_github_list(data, spec['source'], spec['track'], cutoff)
         return {'url': spec['url'], 'etag': etag, 'statuses': statuses,
                 'listings': [l for l in listings if keep(l['title'], l['company'])]}
@@ -448,9 +450,10 @@ def main():
     keep = title_filter(request.get('title_filter'))
     is_student = student_filter(request.get('student_filter'))
     watched = set((request.get('watch') or {}).get('ids') or [])
+    watched_urls = set((request.get('watch') or {}).get('urls') or [])
     workday_urls = (request.get('watch') or {}).get('workday_urls') or []
 
-    lists = [load_list(spec, cutoff, keep, watched) for spec in request.get('lists', [])]
+    lists = [load_list(spec, cutoff, keep, watched, watched_urls) for spec in request.get('lists', [])]
     with ThreadPoolExecutor(max_workers=4) as pool:
         boards = list(pool.map(lambda spec: load_board(spec, cutoff, keep, is_student, watched), request.get('boards', [])))
         workday = list(pool.map(lambda spec: load_workday(spec, cutoff, keep, is_student), request.get('workday', [])))

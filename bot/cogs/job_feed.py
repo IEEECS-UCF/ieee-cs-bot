@@ -464,13 +464,16 @@ class JobFeed(commands.Cog):
     # ---------- closed roles ----------
 
     def watch_targets(self, include_workday):
-        """Ids (and, when Workday is due, Workday links) of every tracked post's role."""
-        ids, urls = set(), set()
+        """Ids of every tracked post's role, links for posts that couldn't be matched to an id,
+        and (when Workday is due) Workday links."""
+        ids, links, workday = set(), set(), set()
         for post in self.state["posts"].values():
             ids.update(post["ids"])
+            if not post["ids"]:
+                links.update(post["raw_urls"])
             if include_workday:
-                urls.update(u for u in post["raw_urls"] if is_workday_link(u))
-        return {'ids': sorted(ids), 'workday_urls': sorted(urls)}
+                workday.update(u for u in post["raw_urls"] if is_workday_link(u))
+        return {'ids': sorted(ids), 'urls': sorted(links), 'workday_urls': sorted(workday)}
 
     def post_index(self):
         index = {}
@@ -535,6 +538,7 @@ class JobFeed(commands.Cog):
         direct = [self.status_cache.get(i) for i in post["ids"] if ":" in i]
         direct += [self.status_cache.get(u) for u in post["raw_urls"] if is_workday_link(u)]
         listed = [self.status_cache.get(i) for i in post["ids"] if ":" not in i]
+        listed += [self.status_cache.get(u) for u in post["raw_urls"] if not is_workday_link(u)]
         for statuses in (direct, listed):
             if "open" in statuses:
                 return "open"
