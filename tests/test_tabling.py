@@ -1,9 +1,12 @@
 import datetime
+import re
 import types
+
+import pytest
 
 from bot.cogs import volunteer
 from bot.cogs import officer as officer_cog
-from bot.officer import tabling
+from bot.officer import tabling, sources
 from tests.officer_fixtures import NOW
 
 TZ = NOW.tzinfo
@@ -84,9 +87,9 @@ async def test_loop_posts_once_with_board_claims(monkeypatch):
     cog.tabling_channel_id = 42
     cog.bot = types.SimpleNamespace(get_channel=lambda cid: channel,
                                     get_guild=lambda gid: types.SimpleNamespace(members=MEMBERS))
-    async def sessions():
-        return tabling.sessions(rows())
-    cog.tabling_sessions = sessions
+    async def fake_fetch(session):
+        return rows()
+    monkeypatch.setattr(officer_cog, "fetch_tabling", fake_fetch)
     class Clock(datetime.datetime):
         @classmethod
         def now(cls, tz=None):
@@ -97,3 +100,74 @@ async def test_loop_posts_once_with_board_claims(monkeypatch):
     assert len(channel.sent) == 1
     text, pinged = channel.sent[0]
     assert pinged == [2, 5] and "Transfer Resource Fair" in text
+
+
+# ---------- keeping an eye on the sheet ----------
+
+def test_dates_need_a_year_and_bad_ones_are_reported():
+    assert tabling.parse_day("2026-11-06") == datetime.date(2026, 11, 6)
+    assert tabling.parse_day("11/6/2026") == datetime.date(2026, 11, 6)
+    assert tabling.parse_day("Nov 6, 2026") == datetime.date(2026, 11, 6)
+    assert tabling.parse_day("Nov 6") is None and tabling.parse_day("") is None
+    bad = rows()[:2] + [dict(rows()[0], Date="Friday")]
+    assert len(tabling.sessions(bad)) == 2
+    assert '1 session(s) have a date the bot can\'t read ("Friday")' in tabling.sheet_problem(bad)
+    assert tabling.sheet_problem(rows()[:2]) is None
+
+class FakeResponse:
+    def __init__(self, status, kind, text):
+        self.status, self.headers, self._text = status, {"Content-Type": kind}, text
+    async def text(self):
+        return self._text
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, *exc):
+        return False
+
+class FakeSession:
+    def __init__(self, response):
+        self.response = response
+    def get(self, url, **kwargs):
+        return self.response
+
+@pytest.mark.parametrize("status,kind,text,message", [
+    (404, "text/html", "", "HTTP 404"),
+    (200, "text/html; charset=utf-8", "<html>Sign in</html>", "sign-in page"),
+    (200, "text/csv", "Name,When\nx,y\n", "no \"Event Name\" column"),
+    (200, "text/csv", ",Event Name,Date,Time\n,x,2026-11-06,3\n", "Column(s) missing: Location, Volunteer 1, Volunteer 2"),
+])
+async def test_sheet_errors_say_what_to_fix(status, kind, text, message):
+    with pytest.raises(sources.TablingSheetError, match=re.escape(message)):
+        await sources.fetch_tabling(FakeSession(FakeResponse(status, kind, text)))
+
+async def test_sheet_reads_normally():
+    text = ",Event Name,Date,Time,Location,Volunteer 1,Volunteer 2,Notes\n,Fair,2026-11-06,3 PM,SU,Jack,,\n,,,,,,,\n"
+    got = await sources.fetch_tabling(FakeSession(FakeResponse(200, "text/csv", text)))
+    assert len(got) == 1 and got[0]["Volunteer 1"] == "Jack"
+
+async def test_broken_sheet_alerts_once_a_day_after_a_few_misses(monkeypatch):
+    alerts = []
+    async def fake_alert(bot, where, error=None, detail=None):
+        alerts.append(detail)
+    async def broken(session):
+        raise sources.TablingSheetError("Google returned HTTP 404.")
+    monkeypatch.setattr(officer_cog, "alert", fake_alert)
+    monkeypatch.setattr(officer_cog, "fetch_tabling", broken)
+    cog = officer_cog.Officer.__new__(officer_cog.Officer)
+    cog.bot = None
+    for _ in range(officer_cog.TABLING_ALERT_AFTER - 1):
+        assert await cog.check_tabling_sheet() is None
+    assert alerts == []
+    await cog.check_tabling_sheet()
+    await cog.check_tabling_sheet()
+    assert len(alerts) == 1 and alerts[0].startswith("Google returned HTTP 404.")
+    async def fixed(session):
+        return rows()[:2]
+    monkeypatch.setattr(officer_cog, "fetch_tabling", fixed)
+    assert len(await cog.check_tabling_sheet()) == 2
+    assert "problem" not in tabling.load_state() and "failures" not in tabling.load_state()
+
+def test_chapter_view_shows_why_the_sheet_failed():
+    from bot.officer import render
+    embeds = render.chapter_embeds(None, {}, datetime.date(2026, 11, 2), tabling_error="Google returned HTTP 404.")
+    assert "Couldn't read the tabling sheet: Google returned HTTP 404." in embeds[1].description

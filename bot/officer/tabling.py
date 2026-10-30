@@ -1,6 +1,8 @@
 import re
 import datetime
 
+from dateutil import parser
+
 from bot.officer.data import load_json, save_json
 
 # Day-before reminders for tabling sessions on the Tabling Signup sheet. The
@@ -9,7 +11,8 @@ from bot.officer.data import load_json, save_json
 # /officer chapter, and that choice always wins.
 #
 #   data/people.json      {"<name, lowercased>": <user id> | "none"}
-#   data/tabling.json     {"sent": {"<date>|<time>": "<date sent>"}}
+#   data/tabling.json     {"sent": {"<date>|<time>": "<date sent>"},
+#                          "problem": "...", "failures": n, "alerted": "<date>"}  (while the sheet is broken)
 PEOPLE_FILE = "data/people.json"
 STATE_FILE = "data/tabling.json"
 NOT_IN_DISCORD = "none"
@@ -88,13 +91,36 @@ def resolve(name, members, people=None):
 
 # ---------- sessions and reminders ----------
 
+def parse_day(text):
+    """2026-11-06, 11/6/2026 or Nov 6, 2026 (the year has to be there), else None."""
+    text = (text or "").strip()
+    try:
+        return datetime.date.fromisoformat(text)
+    except ValueError:
+        pass
+    if not re.search(r"\b\d{4}\b", text):
+        return None
+    try:
+        return parser.parse(text).date()
+    except (ValueError, OverflowError):
+        return None
+
+def sheet_problem(rows):
+    """What's wrong with rows the bot could download but can't fully use, or None."""
+    unreadable = [r.get('Date', '').strip() or "(blank)" for r in rows
+                  if r.get('Event Name', '').strip() and parse_day(r.get('Date')) is None]
+    if unreadable:
+        examples = ", ".join(f"\"{d}\"" for d in unreadable[:3])
+        return (f"{len(unreadable)} session(s) have a date the bot can't read ({examples}), so they're skipped. "
+                "Dates need a year, like 2026-11-06 or 11/6/2026.")
+    return None
+
 def sessions(rows):
     """Sheet rows as sessions: {"date", "time", "event", "location", "names", "notes", "key"}."""
     found = []
     for r in rows or []:
-        try:
-            day = datetime.date.fromisoformat(r.get('Date', '').strip())
-        except ValueError:
+        day = parse_day(r.get('Date'))
+        if day is None:
             continue
         time = r.get('Time', '').strip()
         found.append({"date": day, "time": time, "event": r.get('Event Name', '').strip(),
@@ -143,6 +169,9 @@ def reminder(session, members, claimed, board_link=None, people=None):
 
 def load_state():
     return load_json(STATE_FILE, {"sent": {}})
+
+def save_state(state):
+    save_json(STATE_FILE, state)
 
 def mark_sent(key, today):
     state = load_state()

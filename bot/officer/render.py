@@ -5,6 +5,7 @@ from dateutil import parser
 
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.officer.data import load_deadlines
+from bot.officer import tabling
 from bot.officer.sources import TZ
 from bot.officer.steps import PHASES, LEGEND, PROBLEMS, event_steps, is_open, problems, owner_of
 
@@ -119,18 +120,13 @@ def deadline_lines(today):
 
 def tabling_lines(rows, today):
     lines = []
-    for r in rows:
-        try:
-            day = datetime.date.fromisoformat(r.get('Date', '').strip())
-        except ValueError:
+    for x in tabling.sessions(rows):
+        if not 0 <= (x["date"] - today).days <= TABLING_DAYS:
             continue
-        if not 0 <= (day - today).days <= TABLING_DAYS:
-            continue
-        filled = [r.get(k, '').strip() for k in ('Volunteer 1', 'Volunteer 2') if r.get(k, '').strip()]
-        mark = "🔴" if not filled else ("🟡" if len(filled) < 2 else "🟢")
-        lines.append(f"{mark} `{day:%a %b %-d}` {r.get('Event Name', '').strip()} {r.get('Time', '').strip()}: "
-                     + (", ".join(filled) or "**nobody yet**"))
-    return lines or ["No tabling sessions in the next two months."]
+        mark = "🔴" if not x["names"] else ("🟡" if len(x["names"]) < len(tabling.SLOTS) else "🟢")
+        lines.append(f"{mark} `{x['date']:%a %b %-d}` {x['event']} {x['time']}: " + (", ".join(x["names"]) or "**nobody yet**"))
+    problem = tabling.sheet_problem(rows)
+    return (lines or ["No tabling sessions in the next two months."]) + ([f"⚠️ {problem}"] if problem else [])
 
 def task_lines(tasks):
     lines = [f"**{t['title']}** ({len(t['claimed'])}/{t['slots']}): " + (", ".join(f"<@{u}>" for u in t["claimed"]) or "nobody yet")
@@ -145,10 +141,11 @@ def member_lines(verified, pending, guild_id, year):
         lines.append(f"⬜ <@{uid}> `{record['number']}` since {record['submitted']}{link}")
     return lines
 
-def chapter_embeds(tabling_rows, tasks, today, membership=None, guild_id=None):
+def chapter_embeds(tabling_rows, tasks, today, membership=None, guild_id=None, tabling_error=None):
     embeds = [build_embed("⏰ Deadlines", deadline_lines(today), IEEE_GOLD),
               build_embed("🪧 Tabling", tabling_lines(tabling_rows, today) if tabling_rows is not None
-                          else ["Tabling sheet not configured or unreadable."]),
+                          else [f"⚠️ Couldn't read the tabling sheet: {tabling_error}" if tabling_error
+                                else "No tabling sheet set (TABLING_SHEET_ID)."]),
               build_embed("🙋 Volunteer tasks", task_lines(tasks))]
     if membership is not None:
         embeds.append(build_embed("🪪 IEEE members", member_lines(*membership, guild_id, today.year)))

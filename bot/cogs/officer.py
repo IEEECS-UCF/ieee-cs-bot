@@ -10,7 +10,7 @@ from bot.cogs import volunteer
 from bot.utils.alerts import alert
 from bot.officer import render, members, metrics, tabling
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
-from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TABLING_SHEET_ID
+from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TablingSheetError, TABLING_SHEET_ID
 from bot.officer.steps import event_steps, problems, owner_of
 from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton, open_card, open_buttons,
                                OFFICER_ROLE_IDS)
@@ -31,6 +31,7 @@ NUDGE_HOUR = 11
 NUDGE_REPEAT_DAYS = 7
 REPORT_HOUR = 10
 TABLING_REMINDER_HOUR = int(os.getenv('TABLING_REMINDER_HOUR', '12'))  # the day before a session
+TABLING_ALERT_AFTER = 3  # sheet checks (30 min apart) in a row that fail before alerting
 TABLING_TASK_DAYS = 14
 
 
@@ -91,9 +92,9 @@ class Officer(commands.Cog):
             self.monthly_metrics.start()
         else:
             print("Monthly report disabled: METRICS_CHANNEL_ID not set.")
-        if self.tabling_channel_id and TABLING_SHEET_ID:
-            self.tabling_reminders.start()
-        else:
+        if TABLING_SHEET_ID:
+            self.tabling_reminders.start()   # also watches that the sheet stays readable
+        if not (self.tabling_channel_id and TABLING_SHEET_ID):
             print("Tabling reminders disabled: TABLING_REMINDER_CHANNEL_ID or TABLING_SHEET_ID not set.")
 
     def cog_unload(self):
@@ -146,16 +147,19 @@ class Officer(commands.Cog):
     # ---------- helpers the views use ----------
 
     async def chapter_embeds(self):
-        rows = None
+        rows, error = None, None
         if TABLING_SHEET_ID:
             try:
                 async with aiohttp.ClientSession() as session:
                     rows = await fetch_tabling(session)
+            except TablingSheetError as e:
+                error = str(e)
             except Exception as e:
+                error = f"couldn't reach Google ({type(e).__name__})"
                 print(f"Tabling sheet unreadable: {e}")
         today = datetime.datetime.now(TZ).date()
         return render.chapter_embeds(rows, volunteer.load_tasks(), today, members.counts(today),
-                                     os.getenv('GUILD_ID'))
+                                     os.getenv('GUILD_ID'), error)
 
     async def monthly_report(self, year, month):
         """(embeds, (csv bytes, filename)) for a month, comparing with the month before."""
@@ -338,12 +342,44 @@ class Officer(commands.Cog):
     async def before_tabling(self):
         await self.bot.wait_until_ready()
 
+    async def check_tabling_sheet(self):
+        """Read the sheet; alert (once a day) if it stays unreadable or has rows the bot skips.
+
+        Returns the sessions, or None if the sheet couldn't be read.
+        """
+        rows, problem = None, None
+        try:
+            async with aiohttp.ClientSession() as session:
+                rows = await fetch_tabling(session)
+            problem = tabling.sheet_problem(rows)
+        except TablingSheetError as e:
+            problem = str(e)
+        except Exception as e:
+            problem = f"Couldn't reach Google ({type(e).__name__}: {e})."
+        state = tabling.load_state()
+        today = datetime.datetime.now(TZ).date().isoformat()
+        if problem is None:
+            if state.get("problem"):
+                print("Tabling sheet readable again.")
+            state.pop("problem", None)
+            state.pop("failures", None)
+        else:
+            state["failures"] = state.get("failures", 0) + 1
+            state["problem"] = problem
+            # A few misses in a row (about 1.5 hours), so a Google hiccup doesn't alert
+            if state["failures"] >= TABLING_ALERT_AFTER and state.get("alerted") != today:
+                await alert(self.bot, "Tabling sheet", detail=problem + " Tabling reminders and shifts can't see "
+                            "the sessions it affects until it's fixed.")
+                state["alerted"] = today
+        tabling.save_state(state)
+        return tabling.sessions(rows) if rows is not None else None
+
     async def send_tabling_reminders_if_due(self):
         now = datetime.datetime.now(TZ)
-        sent = tabling.load_state()["sent"]
-        if now.hour < TABLING_REMINDER_HOUR:
+        all_sessions = await self.check_tabling_sheet()
+        if not self.tabling_channel_id or all_sessions is None or now.hour < TABLING_REMINDER_HOUR:
             return
-        due = tabling.due(await self.tabling_sessions(), sent, now, TABLING_REMINDER_HOUR)
+        due = tabling.due(all_sessions, tabling.load_state()["sent"], now, TABLING_REMINDER_HOUR)
         if not due:
             return
         channel = self.bot.get_channel(self.tabling_channel_id)

@@ -181,15 +181,32 @@ async def fetch_repos(session):
         resp.raise_for_status()
         return [r for r in await resp.json() if r['name'] not in NOT_SLIDE_REPOS]
 
+TABLING_COLUMNS = ('Date', 'Time', 'Event Name', 'Location', 'Volunteer 1', 'Volunteer 2')
+
+class TablingSheetError(Exception):
+    """The Tabling Signup sheet can't be read; the message says what to fix."""
+
 async def fetch_tabling(session):
-    """Rows of the Tabling Signup sheet (shared by link, read as CSV)."""
+    """Rows of the Tabling Signup sheet (its first tab, shared by link, read as CSV)."""
     url = f"https://docs.google.com/spreadsheets/d/{TABLING_SHEET_ID}/export?format=csv"
     async with session.get(url, timeout=aiohttp.ClientTimeout(total=60)) as resp:
-        resp.raise_for_status()
+        if resp.status != 200:
+            raise TablingSheetError(f"Google returned HTTP {resp.status}. Is it still shared as "
+                                    "\"anyone with the link can view\"?")
+        kind = resp.headers.get('Content-Type', '')
         text = await resp.text()
+    if 'text/html' in kind:
+        raise TablingSheetError("Google sent a sign-in page instead of the sheet, so it's probably no longer "
+                                "shared as \"anyone with the link can view\".")
     rows = list(csv.reader(io.StringIO(text)))
-    header_at = next(i for i, r in enumerate(rows) if 'Event Name' in r)
+    header_at = next((i for i, r in enumerate(rows) if 'Event Name' in [c.strip() for c in r]), None)
+    if header_at is None:
+        raise TablingSheetError("The first tab has no \"Event Name\" column. Was the signup tab moved "
+                                "out of first place, or the column renamed?")
     header = [h.strip() for h in rows[header_at]]
+    missing = [c for c in TABLING_COLUMNS if c not in header]
+    if missing:
+        raise TablingSheetError(f"Column(s) missing: {', '.join(missing)}. Were they renamed?")
     return [dict(zip(header, r)) for r in rows[header_at + 1:] if any(c.strip() for c in r)]
 
 async def _knightconnect(session, events, store, snap):
