@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import discord
 from discord.ext import commands
@@ -34,8 +35,22 @@ class IEEECSBot(commands.Bot):
                 except Exception as e:
                     print(f"Failed to load extension {extension_name}: {e}")
         
+        self.tree.on_error = self.on_app_command_error
         await self.tree.sync()
         print("Slash commands synced.")
+
+    async def on_app_command_error(self, interaction, error):
+        """Log slash-command failures and tell the user instead of failing silently."""
+        name = interaction.command.qualified_name if interaction.command else "?"
+        logging.getLogger("bot").error("Command /%s failed", name, exc_info=error)
+        message = "Something went wrong running that command. It has been logged."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     async def on_ready(self):
         print(f'Logged in as {self.user} (ID: {self.user.id})')
@@ -47,6 +62,7 @@ async def main():
     if not token:
         raise ValueError("DISCORD_TOKEN not found. Please check your .env file.")
     
+    discord.utils.setup_logging(level=logging.INFO)
     bot = IEEECSBot()
     
     async with bot:
