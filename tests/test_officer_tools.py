@@ -139,3 +139,14 @@ def test_workshops_default_to_workshop_chair(monkeypatch):
     assert ot.owner_of(workshop, {}) == (711695730594676849, False)
     assert ot.owner_of(gbm, {}) == (None, False)
     assert ot.owner_of(workshop, {"w": 42}) == (42, True)   # set by hand wins
+
+
+# ---------- digest schedule ----------
+
+def test_digest_posts_sunday_and_wednesday_once():
+    at = lambda y, m, d, h: datetime.datetime(y, m, d, h, tzinfo=TZ)
+    assert ot.digest_due(at(2026, 11, 1, 10), None)            # Sunday 10 AM
+    assert ot.digest_due(at(2026, 11, 4, 11), "2026-11-01")    # Wednesday
+    assert not ot.digest_due(at(2026, 11, 1, 9), None)         # too early
+    assert not ot.digest_due(at(2026, 11, 2, 10), None)        # Monday
+    assert not ot.digest_due(at(2026, 11, 1, 15), "2026-11-01")  # already posted today

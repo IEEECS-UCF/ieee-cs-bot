@@ -49,8 +49,11 @@ EVENTS_LOOKAHEAD_DAYS = 45
 ROOM_WARNING_DAYS = 21     # flag events this close with no room
 TABLING_LOOKAHEAD_DAYS = 60
 DEADLINE_LOOKAHEAD_DAYS = 90
-DIGEST_WEEKDAY = 0         # Monday
-DIGEST_HOUR = 10           # local time, after the 9 AM weekly summary
+# Days the officer digest posts (DIGEST_DAYS, e.g. "sun,wed"), at DIGEST_HOUR local time
+WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+DIGEST_DAYS = {WEEKDAYS[d.strip()[:3].lower()] for d in os.getenv('DIGEST_DAYS', 'sun,wed').split(",")
+               if d.strip()[:3].lower() in WEEKDAYS}
+DIGEST_HOUR = 10
 CHECKIN_PICK_BACK_DAYS = 2    # events offered by /officer checkin create
 CHECKIN_PICK_AHEAD_DAYS = 30
 WRAPUP_LOOKBACK_DAYS = 21     # events still shown in the wrap-up checklist
@@ -544,6 +547,12 @@ def due_nudges(items_by_event, sent, today):
     return due
 
 
+def digest_due(now, last_day):
+    """Post on a digest day, once, after DIGEST_HOUR."""
+    return (now.weekday() in DIGEST_DAYS and now.hour >= DIGEST_HOUR
+            and last_day != now.date().isoformat())
+
+
 MESSAGE_EMBED_CHARS = 5800  # Discord allows 6000 across all embeds in one message
 MESSAGE_EMBEDS = 10
 
@@ -629,7 +638,7 @@ class DraftView(discord.ui.View):
 class OfficerTools(commands.Cog):
     """Officer checklists, shown privately to whoever runs the command.
 
-    The Monday digest only posts if OFFICER_DIGEST_CHANNEL_ID is set.
+    The officer digest (DIGEST_DAYS) only posts if OFFICER_DIGEST_CHANNEL_ID is set.
     """
 
     officer = app_commands.Group(
@@ -664,7 +673,7 @@ class OfficerTools(commands.Cog):
         channel = os.getenv('OFFICER_DIGEST_CHANNEL_ID')
         self.digest_channel_id = int(channel) if channel else None
         if self.digest_channel_id:
-            self.weekly_digest.start()
+            self.officer_digest.start()
         else:
             print("Officer digest disabled: OFFICER_DIGEST_CHANNEL_ID not set.")
         nudge_channel = os.getenv('NUDGE_CHANNEL_ID')
@@ -675,7 +684,7 @@ class OfficerTools(commands.Cog):
             print("Event nudges disabled: NUDGE_CHANNEL_ID not set.")
 
     def cog_unload(self):
-        self.weekly_digest.cancel()
+        self.officer_digest.cancel()
         self.daily_nudges.cancel()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -762,7 +771,7 @@ class OfficerTools(commands.Cog):
     async def deadlines_list(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=build_embed("⏰ Deadlines", check_deadlines(), IEEE_GOLD), ephemeral=True)
 
-    @deadlines.command(name="add", description="Add a deadline to the list and the Monday digest.")
+    @deadlines.command(name="add", description="Add a deadline to the list and the officer digest.")
     @app_commands.describe(date="YYYY-MM-DD", what="What is due")
     async def deadlines_add(self, interaction: discord.Interaction, date: str, what: str):
         try:
@@ -1366,10 +1375,10 @@ class OfficerTools(commands.Cog):
                 print(f"Could not update closed task message: {e}")
         await interaction.response.send_message(f"Closed **{found['title']}**.", ephemeral=True)
 
-    # ---------- Monday digest (off unless configured) ----------
+    # ---------- officer digest (off unless configured) ----------
 
     @tasks.loop(minutes=30)
-    async def weekly_digest(self):
+    async def officer_digest(self):
         # A raised exception would stop tasks.loop for good, so catch everything
         try:
             await self.post_digest_if_due()
@@ -1377,18 +1386,14 @@ class OfficerTools(commands.Cog):
             print("Officer digest failed:")
             traceback.print_exc()
 
-    @weekly_digest.before_loop
+    @officer_digest.before_loop
     async def before_digest(self):
         await self.bot.wait_until_ready()
 
     async def post_digest_if_due(self):
         now = datetime.datetime.now(TZ)
-        week = now.strftime('%G-W%V')
-        state = {}
-        if os.path.exists(DIGEST_STATE_FILE):
-            with open(DIGEST_STATE_FILE) as f:
-                state = json.load(f)
-        if now.weekday() != DIGEST_WEEKDAY or now.hour < DIGEST_HOUR or state.get('week') == week:
+        state = load_json(DIGEST_STATE_FILE, {})
+        if not digest_due(now, state.get('day')):
             return
         channel = self.bot.get_channel(self.digest_channel_id)
         if channel is None:
@@ -1404,15 +1409,12 @@ class OfficerTools(commands.Cog):
             build_embed("⏰ Deadlines", check_deadlines(), IEEE_GOLD),
         ]
         role = os.getenv('OFFICER_DIGEST_ROLE_ID')
-        content = f"<@&{role}> **Weekly officer digest**" if role else "**Weekly officer digest**"
+        content = f"<@&{role}> **Officer digest**" if role else "**Officer digest**"
         for i, batch in enumerate(split_embeds(embeds)):
             # Only the first message pings
             await channel.send(content=content if i == 0 else None, embeds=batch, allowed_mentions=discord.AllowedMentions(
                 everyone=False, users=False, roles=[discord.Object(int(role))] if role and i == 0 else False))
-        tmp = DIGEST_STATE_FILE + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump({'week': week}, f)
-        os.replace(tmp, DIGEST_STATE_FILE)
+        save_json(DIGEST_STATE_FILE, {'day': now.date().isoformat()})
 
 
 async def setup(bot):
