@@ -34,7 +34,7 @@ CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
 WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked or linked
 DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
 OWNERS_FILE = "data/owners.json"      # calendar event ID -> Discord user ID of its owner
-# Default owner by kind of event, e.g. "workshops:<user id>"; /officer owner overrides it
+# Default owner by kind of event ("workshops:<id>,other:<id>"); /officer owner overrides it
 DEFAULT_OWNERS = dict(pair.split(":", 1) for pair in os.getenv('DEFAULT_OWNERS', '').split(",") if ":" in pair)
 NUDGES_FILE = "data/nudges.json"      # {"sent": {"<event>|<item>": date}, "threads": {event: thread ID}}
 GITHUB_ORG = os.getenv('GITHUB_ORG', 'IEEECS-UCF')
@@ -168,7 +168,8 @@ def owner_of(event, owners):
     """(user ID or None, set by hand?) for an event."""
     if event['id'] in owners:
         return owners[event['id']], True
-    default = DEFAULT_OWNERS.get(event_text.kind(event) or '')
+    # Events that aren't a workshop, social or career event (GBMs, TechX) use "other"
+    default = DEFAULT_OWNERS.get(event_text.kind(event) or 'other')
     return (int(default), False) if default else (None, False)
 
 def check_events(events):

@@ -150,3 +150,10 @@ def test_digest_posts_sunday_and_wednesday_once():
     assert not ot.digest_due(at(2026, 11, 1, 9), None)         # too early
     assert not ot.digest_due(at(2026, 11, 2, 10), None)        # Monday
     assert not ot.digest_due(at(2026, 11, 1, 15), "2026-11-01")  # already posted today
+
+
+def test_other_events_default_to_chair(monkeypatch):
+    monkeypatch.setattr(ot, "DEFAULT_OWNERS", {"workshops": "1", "other": "2"})
+    assert ot.owner_of(make_event(name="Fall GBM #3", gid="g"), {}) == (2, False)
+    assert ot.owner_of(make_event(name="TechX", gid="t"), {}) == (2, False)
+    assert ot.owner_of(make_event(name="Board Game Night Social", gid="s"), {}) == (None, False)
