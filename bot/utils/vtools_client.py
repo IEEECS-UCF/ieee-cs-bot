@@ -27,3 +27,16 @@ async def fetch_branch_events(session, day, spoid):
         if len(data) < 1000:
             return results
         page += 1
+
+async def fetch_event(session, event_id):
+    """One vTools event by ID (for events an officer linked by hand), or None."""
+    url = "https://events.vtools.ieee.org/RST/events/api/public/v6/events/list"
+    async with session.get(url, params={"id": str(event_id)}, headers=HEADERS, timeout=TIMEOUT) as resp:
+        resp.raise_for_status()
+        data = (await resp.json(content_type=None)).get("data", [])
+    return data[0]["attributes"] if data else None
+
+def parse_event_id(text):
+    """Accept a bare vTools ID or a link like events.vtools.ieee.org/m/552721."""
+    digits = "".join(ch if ch.isdigit() else " " for ch in (text or "")).split()
+    return digits[-1] if digits else None

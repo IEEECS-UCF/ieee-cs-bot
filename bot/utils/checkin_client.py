@@ -43,3 +43,16 @@ def qr_png(url):
     buffer = io.BytesIO()
     segno.make(url, error='m').save(buffer, kind='png', scale=12, border=2)
     return buffer.getvalue()
+
+async def form_info(form_id):
+    """Title and links of an existing form the chapter account can open."""
+    return await call("info", formId=form_id)
+
+def parse_form_id(text):
+    """Accept a form ID or an edit link like docs.google.com/forms/d/<id>/edit."""
+    text = (text or "").strip()
+    if "/forms/d/e/" in text:
+        return None  # a share link; it doesn't contain the ID the script needs
+    if "/forms/d/" in text:
+        text = text.split("/forms/d/", 1)[1].split("/", 1)[0]
+    return text if len(text) > 20 and all(c.isalnum() or c in "-_" for c in text) else None

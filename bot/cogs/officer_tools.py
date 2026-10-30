@@ -16,7 +16,7 @@ from dateutil import parser
 
 from bot.utils.gcal_client import get_calendar_service
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
-from bot.utils.vtools_client import fetch_branch_events
+from bot.utils.vtools_client import fetch_branch_events, fetch_event, parse_event_id
 from bot.utils import checkin_client
 
 TZ = ZoneInfo(os.getenv('REMINDER_TZ', 'America/New_York'))
@@ -25,7 +25,8 @@ TABLING_SHEET_ID = os.getenv('TABLING_SHEET_ID')
 DEADLINES_FILE = "bot/deadlines.json"
 DIGEST_STATE_FILE = "data/digest.json"
 CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
-WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked
+WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked or linked
+DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
 GITHUB_ORG = os.getenv('GITHUB_ORG', 'IEEECS-UCF')
 NOT_SLIDE_REPOS = {'website', 'ieeecs-ucf.github.io', 'ieee-cs-bot'}
 
@@ -87,29 +88,29 @@ async def fetch_tabling(session):
     header = [h.strip() for h in rows[header_at]]
     return [dict(zip(header, r)) for r in rows[header_at + 1:] if any(c.strip() for c in r)]
 
-def load_checkins():
-    if not os.path.exists(CHECKINS_FILE):
-        return {}
-    with open(CHECKINS_FILE) as f:
+def load_json(path, default):
+    if not os.path.exists(path):
+        return default
+    with open(path) as f:
         return json.load(f)
+
+def save_json(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, path)
+
+def load_checkins():
+    return load_json(CHECKINS_FILE, {})
 
 def save_checkins(checkins):
-    tmp = CHECKINS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(checkins, f, indent=2)
-    os.replace(tmp, CHECKINS_FILE)
+    save_json(CHECKINS_FILE, checkins)
 
 def load_wrapups():
-    if not os.path.exists(WRAPUPS_FILE):
-        return {}
-    with open(WRAPUPS_FILE) as f:
-        return json.load(f)
+    return load_json(WRAPUPS_FILE, {})
 
 def save_wrapups(wrapups):
-    tmp = WRAPUPS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(wrapups, f, indent=2)
-    os.replace(tmp, WRAPUPS_FILE)
+    save_json(WRAPUPS_FILE, wrapups)
 
 async def fetch_repos(session):
     """The org's public GitHub repos (unauthenticated: 60 requests/hour is plenty)."""
@@ -119,11 +120,16 @@ async def fetch_repos(session):
         resp.raise_for_status()
         return [r for r in await resp.json() if r['name'] not in NOT_SLIDE_REPOS]
 
+def deadline_key(day, what):
+    return f"{day.isoformat()}|{what}"
+
 def load_deadlines():
-    if not os.path.exists(DEADLINES_FILE):
-        return []
-    with open(DEADLINES_FILE) as f:
-        return [(datetime.date.fromisoformat(d['date']), d['what']) for d in json.load(f)]
+    """The shipped list plus deadlines officers added, minus ones they hid."""
+    extra = load_json(DEADLINES_EXTRA_FILE, {"added": [], "hidden": []})
+    entries = load_json(DEADLINES_FILE, []) + extra["added"]
+    hidden = set(extra["hidden"])
+    deadlines = [(datetime.date.fromisoformat(d['date']), d['what']) for d in entries]
+    return [d for d in deadlines if deadline_key(*d) not in hidden]
 
 
 # ---------- checks (each returns lines of text) ----------
@@ -175,11 +181,26 @@ def reportable(events):
     now = datetime.datetime.now(TZ)
     return [e for e in events if e['end'] < now and 'tabling' not in e['name'].casefold()]
 
+SKIPPED = "not needed"
+
 async def vtools_matches(events):
-    """The vTools record (or None) for each event, keyed by calendar event ID."""
+    """Per calendar event ID: the vTools record, None, or SKIPPED.
+
+    An officer's link (/officer wrapup vtools) wins over the automatic match.
+    """
+    marks = load_wrapups()
     matches, cache = {}, {}
     async with aiohttp.ClientSession() as session:
         for e in events:
+            linked = marks.get(e['id'], {}).get('vtools')
+            if linked == SKIPPED:
+                matches[e['id']] = SKIPPED
+                continue
+            if isinstance(linked, dict):
+                record = await fetch_event(session, linked['id'])
+                if record:
+                    matches[e['id']] = dict(record, linked=True)
+                    continue
             day = e['start'].date()
             if day not in cache:
                 cache[day] = await fetch_branch_events(session, day, BRANCH_SPOID)
@@ -194,14 +215,17 @@ async def check_vtools(events):
     for e in past:
         match = matches[e['id']]
         label = f"`{fmt_day(e['start'])}` {e['name']}"
-        if match is None:
+        if match == SKIPPED:
+            lines.append(f"➖ {label}: marked not needed")
+        elif match is None:
             lines.append(f"❌ {label}: **not in vTools**" + await checkin_note(e, checkins))
         elif match.get('ieee-attending') is None:
             lines.append(f"⚠️ {label}: in vTools, **no attendance filed** · <{match['link']}>"
                          + await checkin_note(e, checkins))
         else:
             ieee, guests = match['ieee-attending'], match.get('guests-attending') or 0
-            lines.append(f"✅ {label}: {ieee + guests} ({ieee} IEEE, {guests} guests)")
+            linked = " (linked)" if match.get('linked') else ""
+            lines.append(f"✅ {label}: {ieee + guests} ({ieee} IEEE, {guests} guests){linked}")
     return lines or [f"No calendar events in the last {VTOOLS_LOOKBACK_DAYS} days."]
 
 def best_match(event, candidates):
@@ -257,12 +281,25 @@ DONE, TODO, SKIP = "✅", "⬜", "➖"
 def plain(name):
     return " ".join(name.replace('-', ' ').replace('_', ' ').casefold().split())
 
-def match_slides(events, repos):
-    """Repo holding each event's slides: by name first, then a lone repo created soon after."""
+def match_slides(events, repos, marks=None):
+    """Repo holding each event's slides.
+
+    An officer's link (/officer wrapup slides) wins; otherwise match by name,
+    then by a lone repo created soon after the event.
+    """
     found, claimed = {}, set()
     for e in events:
+        link = (marks or {}).get(e['id'], {}).get('slides_link')
+        if link:
+            found[e['id']] = dict(link, linked=True)
+            claimed.add(link['name'])
+    for e in events:
+        if e['id'] in found:
+            continue
         best, score = None, 0.0
         for r in repos:
+            if r['name'] in claimed:
+                continue
             ratio = difflib.SequenceMatcher(None, plain(e['name']), plain(r['name'])).ratio()
             if ratio > score:
                 best, score = r, ratio
@@ -294,8 +331,8 @@ async def wrapup_rows(events):
         except Exception as e:
             print(f"GitHub repo list failed: {e}")
             repos = []
-    slides = match_slides(recent, repos)
     checkins, marks = load_checkins(), load_wrapups()
+    slides = match_slides(recent, repos, marks)
 
     rows = []
     for e in recent:
@@ -309,11 +346,15 @@ async def wrapup_rows(events):
             except Exception:
                 items.append(("check-in", TODO, "unreadable"))
         match = matches[e['id']]
-        items.append(("vTools", DONE if match and match.get('ieee-attending') is not None else TODO, ""))
+        if match == SKIPPED:
+            items.append(("vTools", SKIP, ""))
+        else:
+            filed = match is not None and match.get('ieee-attending') is not None
+            items.append(("vTools", DONE if filed else TODO, "linked" if match and match.get('linked') else ""))
         if any(w in e['name'].casefold() for w in SOCIAL_WORDS) or mine.get('slides') == 'not needed':
             items.append(("slides", SKIP, ""))
         elif e['id'] in slides:
-            items.append(("slides", DONE, slides[e['id']]['name']))
+            items.append(("slides", DONE, slides[e['id']]['name'] + (", linked" if slides[e['id']].get('linked') else "")))
         else:
             items.append(("slides", DONE if mine.get('slides') == 'done' else TODO, ""))
         recap = mine.get('recap')
@@ -363,11 +404,18 @@ class OfficerTools(commands.Cog):
     wrapup = app_commands.Group(
         name="wrapup", description="After-event checklist: vTools, slides, recap.", parent=officer,
     )
+    reminders = app_commands.Group(
+        name="reminders", description="Day-of event reminders: preview and per-event settings.", parent=officer,
+    )
+    deadlines = app_commands.Group(
+        name="deadlines", description="Chapter deadlines shown in the digest.", parent=officer,
+    )
 
     def __init__(self, bot):
         self.bot = bot
         self._pick_cache = (None, [])  # (fetched at, events) for autocomplete
         self._recent_cache = (None, [])
+        self._repo_cache = (None, [])
         channel = os.getenv('OFFICER_DIGEST_CHANNEL_ID')
         self.digest_channel_id = int(channel) if channel else None
         if self.digest_channel_id:
@@ -403,15 +451,93 @@ class OfficerTools(commands.Cog):
         lines = await check_tabling()
         await interaction.followup.send(embed=build_embed("🪧 Tabling", lines), ephemeral=True)
 
-    @officer.command(name="reminders", description="Preview the day-of event reminders for the next 7 days.")
-    async def reminders_cmd(self, interaction: discord.Interaction):
+    # ---------- reminders ----------
+
+    @reminders.command(name="preview", description="Preview the day-of event reminders for the next 7 days.")
+    async def reminders_preview(self, interaction: discord.Interaction):
         cog = self.bot.get_cog("EventReminders")
         lines = cog.preview_lines(interaction.guild) if cog else ["Event reminders aren't loaded."]
         await interaction.response.send_message(embed=build_embed("🔔 Event reminders", lines), ephemeral=True)
 
-    @officer.command(name="deadlines", description="Chapter deadlines in the next 90 days.")
-    async def deadlines_cmd(self, interaction: discord.Interaction):
+    async def scheduled_autocomplete(self, interaction: discord.Interaction, current: str):
+        events = sorted((e for e in interaction.guild.scheduled_events if e.status == discord.EventStatus.scheduled),
+                        key=lambda e: e.start_time)
+        return [app_commands.Choice(name=f"{fmt_day(e.start_time.astimezone(TZ))} · {e.name}"[:100], value=str(e.id))
+                for e in events if current.casefold() in e.name.casefold()][:25]
+
+    @reminders.command(name="set", description="Override whether an event gets a reminder and who it pings.")
+    @app_commands.describe(event="An upcoming Discord event", send="Send the reminder?", ping="Who the reminder pings")
+    @app_commands.autocomplete(event=scheduled_autocomplete)
+    @app_commands.choices(
+        send=[app_commands.Choice(name="Auto (skip if room is TBA or tentative)", value="auto"),
+              app_commands.Choice(name="Always send", value="always"),
+              app_commands.Choice(name="Never send", value="never")],
+        ping=[app_commands.Choice(name="Auto (from the event name)", value="auto"),
+              app_commands.Choice(name="@Workshops", value="workshops"),
+              app_commands.Choice(name="@Socials", value="socials"),
+              app_commands.Choice(name="@Pro-Dev", value="prodev"),
+              app_commands.Choice(name="@everyone", value="everyone"),
+              app_commands.Choice(name="No ping", value="none")])
+    async def reminders_set(self, interaction: discord.Interaction, event: str,
+                            send: app_commands.Choice[str] = None, ping: app_commands.Choice[str] = None):
+        cog = self.bot.get_cog("EventReminders")
+        target = interaction.guild.get_scheduled_event(int(event)) if event.isdigit() else None
+        if cog is None or target is None:
+            await interaction.response.send_message("Pick an upcoming event from the list.", ephemeral=True)
+            return
+        if send is None and ping is None:
+            await interaction.response.send_message("Choose `send`, `ping`, or both.", ephemeral=True)
+            return
+        cog.set_override(target, send=send.value if send else None, ping=ping.value if ping else None)
+        preview = [line for line in cog.preview_lines(interaction.guild, days=60)
+                   if line.startswith(f"**{target.name}**")]
+        await interaction.response.send_message(embed=build_embed(
+            "🔔 Reminder updated", preview or ["Saved. The event is more than 60 days out, so there's no preview yet."]),
+            ephemeral=True)
+
+    # ---------- deadlines ----------
+
+    @deadlines.command(name="list", description="Chapter deadlines in the next 90 days.")
+    async def deadlines_list(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=build_embed("⏰ Deadlines", check_deadlines(), IEEE_GOLD), ephemeral=True)
+
+    @deadlines.command(name="add", description="Add a deadline to the list and the Monday digest.")
+    @app_commands.describe(date="YYYY-MM-DD", what="What is due")
+    async def deadlines_add(self, interaction: discord.Interaction, date: str, what: str):
+        try:
+            day = datetime.date.fromisoformat(date.strip())
+        except ValueError:
+            await interaction.response.send_message("Use the date format YYYY-MM-DD, like 2027-01-15.", ephemeral=True)
+            return
+        extra = load_json(DEADLINES_EXTRA_FILE, {"added": [], "hidden": []})
+        key = deadline_key(day, what.strip())
+        extra["hidden"] = [k for k in extra["hidden"] if k != key]
+        if not any(deadline_key(datetime.date.fromisoformat(d['date']), d['what']) == key for d in extra["added"]):
+            extra["added"].append({"date": day.isoformat(), "what": what.strip()})
+        save_json(DEADLINES_EXTRA_FILE, extra)
+        await interaction.response.send_message(f"Added: `{day:%a %b %-d, %Y}` {what.strip()}", ephemeral=True)
+
+    async def deadline_autocomplete(self, interaction: discord.Interaction, current: str):
+        return [app_commands.Choice(name=f"{day:%b %-d, %Y} · {what}"[:100], value=deadline_key(day, what)[:100])
+                for day, what in sorted(load_deadlines()) if current.casefold() in what.casefold()][:25]
+
+    @deadlines.command(name="remove", description="Hide a deadline from the list and the digest.")
+    @app_commands.describe(deadline="The deadline to hide")
+    @app_commands.autocomplete(deadline=deadline_autocomplete)
+    async def deadlines_remove(self, interaction: discord.Interaction, deadline: str):
+        match = next(((d, w) for d, w in load_deadlines() if deadline_key(d, w)[:100] == deadline), None)
+        if match is None:
+            await interaction.response.send_message("Pick a deadline from the list.", ephemeral=True)
+            return
+        key = deadline_key(*match)
+        extra = load_json(DEADLINES_EXTRA_FILE, {"added": [], "hidden": []})
+        before = len(extra["added"])
+        extra["added"] = [d for d in extra["added"]
+                          if deadline_key(datetime.date.fromisoformat(d['date']), d['what']) != key]
+        if len(extra["added"]) == before:
+            extra["hidden"].append(key)  # a shipped deadline: hide it instead of deleting
+        save_json(DEADLINES_EXTRA_FILE, extra)
+        await interaction.response.send_message(f"Removed: `{match[0]:%a %b %-d, %Y}` {match[1]}", ephemeral=True)
 
     # ---------- check-in ----------
 
@@ -467,6 +593,42 @@ class OfficerTools(commands.Cog):
             color=IEEE_BLUE)
         embed.set_image(url="attachment://checkin-qr.png")
         await interaction.followup.send(embed=embed, file=qr, ephemeral=True)
+
+    async def any_event_autocomplete(self, interaction: discord.Interaction, current: str):
+        events = {e['id']: e for e in await self.recent_events() + await self.pickable_events()}.values()
+        return [app_commands.Choice(name=f"{fmt_day(e['start'])} · {e['name']}"[:100], value=e['id'])
+                for e in sorted(events, key=lambda e: e['start'], reverse=True)
+                if current.casefold() in e['name'].casefold()][:25]
+
+    @checkin.command(name="link", description="Use an existing Google Form (owned by the chapter account) as an event's check-in.")
+    @app_commands.describe(event="The calendar event", form="The form's edit link or ID")
+    @app_commands.autocomplete(event=any_event_autocomplete)
+    async def checkin_link(self, interaction: discord.Interaction, event: str, form: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        events = {e['id']: e for e in await self.recent_events() + await self.pickable_events()}
+        match = events.get(event)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        form_id = checkin_client.parse_form_id(form)
+        if not form_id:
+            await interaction.followup.send("That doesn't look like a Google Form edit link or ID.", ephemeral=True)
+            return
+        try:
+            info = await checkin_client.form_info(form_id)
+        except checkin_client.CheckinError as e:
+            await interaction.followup.send(
+                f"The chapter account couldn't open that form ({e}). It has to be owned by, or shared with, the chapter account.",
+                ephemeral=True)
+            return
+        checkins = load_checkins()
+        checkins[event] = {'formId': info['formId'], 'url': info['url'], 'shortUrl': info['shortUrl'],
+                           'name': match['name'], 'day': fmt_day(match['start']),
+                           'start': match['start'].isoformat(), 'linked': True}
+        save_checkins(checkins)
+        await interaction.followup.send(
+            f"Linked **{info['title'] or 'the form'}** to {match['name']} ({fmt_day(match['start'])}). "
+            "Results count questions mentioning \"email\" and \"IEEE member\".", ephemeral=True)
 
     @checkin.command(name="results", description="Attendance from an event's check-in form (IEEE vs. guests for vTools).")
     @app_commands.describe(event="An event with a check-in form")
@@ -537,6 +699,94 @@ class OfficerTools(commands.Cog):
         save_wrapups(marks)
         await interaction.response.send_message(
             f"Marked **{item.name}** as **{state.name.lower()}** for {match['name']} ({fmt_day(match['start'])}).", ephemeral=True)
+
+    async def cached_repos(self):
+        fetched, repos = self._repo_cache
+        now = datetime.datetime.now(TZ)
+        if fetched is None or (now - fetched).total_seconds() > 600:
+            async with aiohttp.ClientSession() as session:
+                repos = await fetch_repos(session)
+            self._repo_cache = (now, repos)
+        return repos
+
+    async def repo_autocomplete(self, interaction: discord.Interaction, current: str):
+        choices = [app_commands.Choice(name="auto (detect it again)", value="auto")]
+        try:
+            repos = sorted(await self.cached_repos(), key=lambda r: r['created_at'], reverse=True)
+        except Exception:
+            repos = []
+        choices += [app_commands.Choice(name=r['name'][:100], value=r['name'][:100])
+                    for r in repos if current.casefold() in r['name'].casefold()]
+        return choices[:25]
+
+    @wrapup.command(name="slides", description="Link an event to the repo (or any link) holding its slides.")
+    @app_commands.describe(event="A recent event", repo="An IEEECS-UCF repo, any https link, or auto")
+    @app_commands.autocomplete(event=recent_autocomplete, repo=repo_autocomplete)
+    async def wrapup_slides(self, interaction: discord.Interaction, event: str, repo: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        match = next((e for e in await self.recent_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        repo = repo.strip()
+        marks = load_wrapups()
+        mine = marks.setdefault(event, {})
+        if repo == "auto":
+            mine.pop('slides_link', None)
+            note = "Cleared; slides will be detected automatically again."
+        else:
+            known = next((r for r in await self.cached_repos() if r['name'].casefold() == repo.casefold()), None)
+            if known:
+                mine['slides_link'] = {'name': known['name'], 'url': known['html_url']}
+            elif repo.startswith("https://"):
+                mine['slides_link'] = {'name': repo.rstrip('/').rsplit('/', 1)[-1] or repo, 'url': repo}
+            else:
+                await interaction.followup.send(f"`{repo}` isn't an {GITHUB_ORG} repo or an https link.", ephemeral=True)
+                return
+            note = f"Linked slides: {mine['slides_link']['url']}"
+        save_wrapups(marks)
+        await interaction.followup.send(f"**{match['name']}** ({fmt_day(match['start'])}): {note}", ephemeral=True)
+
+    async def vtools_choice_autocomplete(self, interaction: discord.Interaction, current: str):
+        options = [app_commands.Choice(name="auto (match it again)", value="auto"),
+                   app_commands.Choice(name="not needed (don't report this event)", value=SKIPPED)]
+        if parse_event_id(current):
+            options.insert(0, app_commands.Choice(name=f"vTools event {parse_event_id(current)}", value=current[:100]))
+        return options
+
+    @wrapup.command(name="vtools", description="Link an event to its vTools event, or mark it as not reported.")
+    @app_commands.describe(event="A recent event", vtools="vTools event ID or link (events.vtools.ieee.org/m/…), auto, or not needed")
+    @app_commands.autocomplete(event=recent_autocomplete, vtools=vtools_choice_autocomplete)
+    async def wrapup_vtools(self, interaction: discord.Interaction, event: str, vtools: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        match = next((e for e in await self.recent_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        marks = load_wrapups()
+        mine = marks.setdefault(event, {})
+        if vtools == "auto":
+            mine.pop('vtools', None)
+            note = "Cleared; it will be matched automatically again."
+        elif vtools == SKIPPED:
+            mine['vtools'] = SKIPPED
+            note = "Marked as not needing a vTools report."
+        else:
+            event_id = parse_event_id(vtools)
+            record = None
+            if event_id:
+                async with aiohttp.ClientSession() as session:
+                    record = await fetch_event(session, event_id)
+            if record is None:
+                await interaction.followup.send(f"Couldn't find vTools event `{vtools}`.", ephemeral=True)
+                return
+            mine['vtools'] = {'id': event_id, 'link': record['link']}
+            filed = record.get('ieee-attending')
+            note = (f"Linked to **{record['title']}** <{record['link']}>. "
+                    + (f"Attendance filed: {filed} IEEE, {record.get('guests-attending') or 0} guests."
+                       if filed is not None else "No attendance filed yet."))
+        save_wrapups(marks)
+        await interaction.followup.send(f"**{match['name']}** ({fmt_day(match['start'])}): {note}", ephemeral=True)
 
     # ---------- Monday digest (off unless configured) ----------
 

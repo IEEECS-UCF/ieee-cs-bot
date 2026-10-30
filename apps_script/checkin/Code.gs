@@ -42,6 +42,7 @@ function doPost(e) {
     if (req.action === 'ping') return reply({ok: true});
     if (req.action === 'create') return reply(createForm(req.event, req.date, req.key));
     if (req.action === 'results') return reply(results(req.formId));
+    if (req.action === 'info') return reply(formInfo(FormApp.openById(req.formId), true));
     return reply({error: 'unknown action'});
   } catch (err) {
     return reply({error: String(err)});
@@ -99,6 +100,16 @@ function formInfo(form, existed) {
   return {formId: form.getId(), title: form.getTitle(), url: url, shortUrl: shortUrl, existed: existed};
 }
 
+// Which question is which, by keyword, so forms made by hand work too.
+function questionKind(title) {
+  const t = String(title).toLowerCase();
+  if (t.indexOf('email') !== -1) return 'email';
+  if (t.indexOf('ieee') !== -1 && t.indexOf('member') !== -1 &&
+      t.indexOf('number') === -1 && t.indexOf('#') === -1) return 'member';
+  if (t.indexOf('hear') !== -1) return 'heard';
+  return '';
+}
+
 // Counts each email once. "Not sure" members count as guests for vTools.
 function results(formId) {
   if (!formId) throw new Error('missing formId');
@@ -109,19 +120,20 @@ function results(formId) {
   form.getResponses().forEach(function (response) {
     let email = '', member = '', sources = [];
     response.getItemResponses().forEach(function (item) {
-      const title = item.getItem().getTitle();
+      const kind = questionKind(item.getItem().getTitle());
       const value = item.getResponse();
-      if (title === Q.email) email = String(value).trim().toLowerCase();
-      else if (title === Q.member) member = value;
-      else if (title === Q.heard) sources = value || [];
+      if (kind === 'email') email = String(value).trim().toLowerCase();
+      else if (kind === 'member') member = String(value).trim().toLowerCase();
+      else if (kind === 'heard') sources = Array.isArray(value) ? value : [value];
     });
+    if (!email) email = String(response.getRespondentEmail() || '').trim().toLowerCase();
     if (email) {
       if (seen[email]) return;
       seen[email] = true;
     }
     total++;
-    if (member === 'Yes') ieee++;
-    if (member === 'Not sure') notSure++;
+    if (member.indexOf('yes') === 0) ieee++;
+    if (member.indexOf('not sure') === 0) notSure++;
     sources.forEach(function (s) { heard[s] = (heard[s] || 0) + 1; });
   });
   return {title: form.getTitle(), total: total, ieee: ieee, guests: total - ieee, notSure: notSure, heard: heard};
