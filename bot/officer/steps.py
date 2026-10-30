@@ -24,7 +24,7 @@ ACTIVE_DAYS = 7  # a step shows as "to do" this many days before it's due
 
 # Default owner by kind of event ("workshops:<id>,other:<id>"); "other" covers GBMs, TechX...
 DEFAULT_OWNERS = dict(pair.split(":", 1) for pair in os.getenv('DEFAULT_OWNERS', '').split(",") if ":" in pair)
-SOCIAL_WORDS = ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq', 'tailgate')
+SOCIAL_WORDS = dict(event_text.ROLE_WORDS)['socials']
 # Steps only officers can mark (announcement, recap) aren't tracked for events before this date
 TRACKING_START = datetime.date.fromisoformat(os.getenv('TRACKING_START', '2026-10-30'))
 
@@ -65,6 +65,24 @@ def room_state(event, record):
             return 'confirmed', event['location']
         return room['status'], room.get('room') or event['location']
     return ('confirmed', event['location']) if has_room else ('none', None)
+
+def booked_room(event, record):
+    """The room an event holds or has asked for (a denied request holds nothing)."""
+    status, room = room_state(event, record)
+    return room if status in ('requested', 'confirmed') else None
+
+def clashes(snap, start, end, room=None, exclude=None):
+    """[(event, same room?)] for events overlapping start-end, other than exclude.
+
+    The one clash check: the New event preview, Edit details and room requests all use it.
+    """
+    found = []
+    for other in snap.events:
+        if other['id'] == exclude or not (other['start'] < end and start < other['end']):
+            continue
+        theirs = booked_room(other, snap.store.get(other['id'], {}))
+        found.append((other, bool(room and theirs and same_place(room, theirs))))
+    return found
 
 def timed(today, due, active_from=None):
     """LATER before the step is active, TODO until due, OVERDUE after."""

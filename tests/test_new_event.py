@@ -3,7 +3,8 @@ import types
 
 import pytest
 
-from bot.officer import new_event, views
+from bot.officer import new_event, views, render
+from bot.officer import steps as st
 from bot.officer.data import EventStore
 from tests.officer_fixtures import NOW, event, snapshot
 
@@ -40,12 +41,16 @@ def test_calendar_body_leaves_out_unconfirmed_rooms():
     assert body["start"]["timeZone"] == "America/New_York"
     assert new_event.calendar_body("x", s, e, "", "TCH 151")["location"] == "TCH 151"
 
-def test_overlaps_flag_same_room_and_same_time():
+def test_clashes_flag_same_room_and_same_time():
     a = event(gid="a", location="ENG2 205", days=5)
     b = event(gid="b", location="TCH 151", days=5)
     c = event(gid="c", location="ENG2 205", days=6)
-    found = new_event.overlaps([a, b, c], a["start"], a["end"], "Engineering II 205", lambda e: e["location"])
-    assert [(e["id"], same) for e, same in found] == [("a", True), ("b", False)]
+    d = event(gid="d", location="", days=5)
+    snap = snapshot([a, b, c, d], store={"d": {"room": {"status": "denied", "room": "ENG2 205", "since": "2026-10-01"}}})
+    found = st.clashes(snap, a["start"], a["end"], "Engineering II 205", exclude="x")
+    assert [(e["id"], same) for e, same in found] == [("a", True), ("b", False), ("d", False)]   # a denied room holds nothing
+    assert [e["id"] for e, _ in st.clashes(snap, a["start"], a["end"], "ENG2 205", exclude="a")] == ["b", "d"]
+    assert render.clash_lines(found, same_room_only=True) == [f"⚠️ Same room as **Bash Scripting Workshop** ({render.fmt_day(a['start'])}, ENG2 205)."]
 
 
 # ---------- preview and create ----------

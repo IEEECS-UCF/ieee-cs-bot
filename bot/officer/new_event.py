@@ -3,7 +3,6 @@ import datetime
 
 from dateutil import parser
 
-from bot.utils.event_text import same_place
 from bot.officer.sources import TZ
 
 # Parsing for the New event form on /officer events. The form creates the
@@ -68,12 +67,3 @@ def calendar_body(title, start, end, description, location):
     if location:
         body["location"] = location
     return body
-
-def overlaps(events, start, end, room, room_of):
-    """[(event, same room?)] for events at an overlapping time; room_of(e) is its booked or requested room."""
-    found = []
-    for e in events:
-        if e['start'] < end and start < e['end']:
-            theirs = room_of(e)
-            found.append((e, bool(room) and bool(theirs) and same_place(room, theirs)))
-    return found

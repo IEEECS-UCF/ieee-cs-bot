@@ -81,5 +81,7 @@ def test_report_posts_on_the_first():
     assert officer_cog.report_due(first, None) == "2026-10"
     assert officer_cog.report_due(first, "2026-10") is None
     assert officer_cog.report_due(first.replace(hour=9), None) is None
-    assert officer_cog.report_due(first.replace(day=2), None) is None
+    assert officer_cog.report_due(first.replace(day=3, hour=8), None) == "2026-10"   # bot was down on the 1st
+    assert officer_cog.report_due(first.replace(day=8), None) is None
+    assert officer_cog.report_due(datetime.datetime(2026, 10, 30, 12, tzinfo=TZ), None) is None
     assert officer_cog.report_due(datetime.datetime(2027, 1, 1, 11, tzinfo=TZ), None) == "2026-12"

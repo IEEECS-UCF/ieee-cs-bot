@@ -73,23 +73,25 @@ def fetch_calendar(days_back=WINDOW_BACK_DAYS, days_ahead=WINDOW_AHEAD_DAYS, bet
         token = result.get('nextPageToken')
         if not token:
             break
-    events = []
-    for item in items:
-        if item.get('status') == 'cancelled' or 'dateTime' not in item.get('start', {}):
-            continue
-        name = " ".join((item.get('summary') or 'Untitled').split())
-        if 'tabling' in name.casefold():
-            continue
-        events.append({
-            'id': item['id'],
-            'start': parser.isoparse(item['start']['dateTime']).astimezone(TZ),
-            'end': parser.isoparse(item['end']['dateTime']).astimezone(TZ),
-            'name': name,
-            'location': " ".join((item.get('location') or '').split()),
-            'description': (item.get('description') or '').strip(),
-            'flyer': calendar_flyer(item),
-        })
-    return events
+    events = [to_event(item) for item in items]
+    return [e for e in events if e is not None]
+
+def to_event(item):
+    """A calendar API item as the event dict the officer tools use, or None if it isn't tracked."""
+    if item.get('status') == 'cancelled' or 'dateTime' not in item.get('start', {}):
+        return None
+    name = " ".join((item.get('summary') or 'Untitled').split())
+    if 'tabling' in name.casefold():
+        return None
+    return {
+        'id': item['id'],
+        'start': parser.isoparse(item['start']['dateTime']).astimezone(TZ),
+        'end': parser.isoparse(item['end']['dateTime']).astimezone(TZ),
+        'name': name,
+        'location': " ".join((item.get('location') or '').split()),
+        'description': (item.get('description') or '').strip(),
+        'flyer': calendar_flyer(item),
+    }
 
 
 # ---------- matching listings to events ----------
@@ -97,19 +99,41 @@ def fetch_calendar(days_back=WINDOW_BACK_DAYS, days_ahead=WINDOW_AHEAD_DAYS, bet
 def plain(name):
     return " ".join(name.replace('-', ' ').replace('_', ' ').casefold().split())
 
-def best_match(event, candidates, start_key, title_key):
-    """The listing on the same day closest in name, boosted if within 2 hours."""
-    best, best_score = None, 0.0
-    for c in candidates:
-        start = parser.isoparse(c[start_key]).astimezone(TZ)
-        if start.date() != event['start'].date():
+MIN_NAME_SIMILARITY = 0.4  # a listing has to look like the event by name, not just be at the same time
+
+def name_similarity(a, b):
+    a, b = plain(a), plain(b)
+    return 1.0 if a and b and (a in b or b in a) else difflib.SequenceMatcher(None, a, b).ratio()
+
+def match_score(event, listing, start_key, title_key):
+    """How well a listing fits an event (same day, similar name, near in time), or None."""
+    start = parser.isoparse(listing[start_key]).astimezone(TZ)
+    if start.date() != event['start'].date():
+        return None
+    similarity = name_similarity(event['name'], listing[title_key])
+    if similarity < MIN_NAME_SIMILARITY:
+        return None
+    return similarity + (0.5 if abs((start - event['start']).total_seconds()) <= 2 * 3600 else 0)
+
+def assign_listings(events, candidates_for, start_key, title_key, taken=()):
+    """{event id: listing}, best fits first, each listing used by at most one event.
+
+    taken holds listing IDs already linked to an event by hand.
+    """
+    pairs = []
+    for e in events:
+        for listing in candidates_for(e):
+            score = match_score(e, listing, start_key, title_key)
+            if score is not None:
+                pairs.append((score, e['id'], listing))
+    pairs.sort(key=lambda p: -p[0])
+    found, used = {}, {str(t) for t in taken}
+    for _, gid, listing in pairs:
+        if gid in found or str(listing.get('id')) in used:
             continue
-        score = difflib.SequenceMatcher(None, event['name'].casefold(), c[title_key].casefold()).ratio()
-        if abs((start - event['start']).total_seconds()) <= 2 * 3600:
-            score += 0.5
-        if score > best_score:
-            best, best_score = c, score
-    return best if best_score >= 0.5 else None
+        found[gid] = listing
+        used.add(str(listing.get('id')))
+    return found
 
 def vtools_location(record):
     return " ".join(str(record.get(k) or '') for k in ('building', 'room-number', 'address1')).strip()
@@ -170,6 +194,7 @@ async def fetch_tabling(session):
 
 async def _knightconnect(session, events, store, snap):
     listings = await kc.fetch_org_events(session, KNIGHTCONNECT_ORG_ID)
+    unlinked, taken = [], []
     for e in events:
         linked = store.get(e['id'], {}).get('links', {}).get('knightconnect')
         if linked == SKIPPED:
@@ -177,8 +202,12 @@ async def _knightconnect(session, events, store, snap):
         elif isinstance(linked, dict):
             record = await kc.fetch_event(session, linked['id'])
             snap.knightconnect[e['id']] = dict(record, linked=True) if record else None
+            taken.append(linked['id'])
         else:
-            snap.knightconnect[e['id']] = best_match(e, listings, 'startsOn', 'name')
+            unlinked.append(e)
+    found = assign_listings(unlinked, lambda e: listings, 'startsOn', 'name', taken)
+    for e in unlinked:
+        snap.knightconnect[e['id']] = found.get(e['id'])
     used = {m['id'] for m in snap.knightconnect.values() if isinstance(m, dict)}
     now = datetime.datetime.now(TZ)
     snap.knightconnect_orphans = [
@@ -193,6 +222,7 @@ async def _vtools(session, events, store, snap):
         async with gate:
             return day, await fetch_branch_events(session, day, BRANCH_SPOID)
     by_day = dict(await asyncio.gather(*(day_listings(d) for d in days)))
+    unlinked, taken = [], []
     for e in events:
         linked = store.get(e['id'], {}).get('links', {}).get('vtools')
         if linked == SKIPPED:
@@ -200,8 +230,12 @@ async def _vtools(session, events, store, snap):
         elif isinstance(linked, dict):
             record = await fetch_vtools_event(session, linked['id'])
             snap.vtools[e['id']] = dict(record, linked=True) if record else None
+            taken.append(linked['id'])
         else:
-            snap.vtools[e['id']] = best_match(e, by_day.get(e['start'].date(), []), 'start-time', 'title')
+            unlinked.append(e)
+    found = assign_listings(unlinked, lambda e: by_day.get(e['start'].date(), []), 'start-time', 'title', taken)
+    for e in unlinked:
+        snap.vtools[e['id']] = found.get(e['id'])
 
 async def _slides(session, events, store, snap):
     snap.slides = match_slides(events, await fetch_repos(session), store)

@@ -13,10 +13,10 @@ from bot.utils.vtools_client import fetch_event as fetch_vtools_event, parse_eve
 from bot.utils.gcal_client import patch_event, insert_event, delete_event as delete_calendar_event
 from bot.utils.event_text import same_place
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
-from bot.cogs import volunteer
+from bot.cogs import volunteer, event_reminders
 from bot.officer.data import EventStore, SKIPPED, add_deadline, remove_deadline, load_deadlines, deadline_key
-from bot.officer.sources import TZ, fetch_repos, fetch_tabling, TABLING_SHEET_ID
-from bot.officer.steps import event_steps, owner_of, room_state, PROBLEMS
+from bot.officer.sources import TZ, fetch_repos, fetch_tabling, to_event, TABLING_SHEET_ID, WINDOW_AHEAD_DAYS
+from bot.officer.steps import event_steps, owner_of, booked_room, clashes, PROBLEMS
 from bot.officer import render, new_event
 
 # The interactive parts of the officer tools. Every view here is ephemeral
@@ -138,8 +138,7 @@ class CardView(discord.ui.View):
 
     async def do_draft(self, interaction, event):
         role_key = event_text.kind(event)
-        role_id = os.getenv({'workshops': 'REMINDER_ROLE_WORKSHOPS', 'socials': 'REMINDER_ROLE_SOCIALS',
-                             'prodev': 'REMINDER_ROLE_PRODEV'}.get(role_key, ''), '')
+        role_id = os.getenv(event_reminders.ROLE_ENV.get(role_key, ''), '')
         did = self.cog.cache.with_store().discord_ids.get(self.gid)
         link = f"https://discord.com/events/{os.getenv('GUILD_ID')}/{did}" if did else ""
         draft = event_text.announcement_draft(event, link, f"<@&{role_id}>" if role_id else None)
@@ -269,12 +268,8 @@ class EditModal(discord.ui.Modal, title="Edit event"):
         lines = ["Updated " + ", ".join(changes) + ". Discord follows within a few minutes."]
         snap = await self.card.cog.cache.get(fresh=True)
         if 'start' in body:
-            room = room_state(e, snap.store.get(self.card.gid, {}))[1]
-            room_of = lambda other: room_state(other, snap.store.get(other['id'], {}))[1]
-            others = [o for o in snap.events if o['id'] != self.card.gid]
-            for other, same_room in new_event.overlaps(others, start, end, room, room_of):
-                lines.append(f"⚠️ {'Same room' if same_room else 'Same time'} as **{other['name']}** "
-                             f"({render.fmt_day(other['start'])}, {other['location'] or 'TBA'}).")
+            room = booked_room(e, snap.store.get(self.card.gid, {}))
+            lines += render.clash_lines(clashes(snap, start, end, room, exclude=self.card.gid))
         await interaction.followup.send("\n".join(lines), ephemeral=True)
         await self.card.redraw()
 
@@ -358,8 +353,11 @@ class RoomModal(discord.ui.Modal):
                 lines.append("Updated the calendar's location; Discord follows within a few minutes.")
             except Exception as e:
                 lines.append(f"Couldn't update the calendar's location ({e}); change it there by hand.")
-        clashes = self.card.cog.room_clashes(self.card.gid)
-        lines += [f"⚠️ Same room at an overlapping time as **{c['name']}** ({render.fmt_day(c['start'])})." for c in clashes]
+        snap = self.card.cog.cache.with_store()
+        if event:
+            mine = booked_room(event, snap.store.get(self.card.gid, {}))
+            lines += render.clash_lines(clashes(snap, event['start'], event['end'], mine, exclude=self.card.gid),
+                                        same_room_only=True)
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
         await self.card.redraw()
 
@@ -544,8 +542,8 @@ class DraftEdit(discord.ui.Modal, title="Edit the announcement"):
         self.add_item(self.body)
 
     async def on_submit(self, interaction):
-        url = await self.view.post_once(interaction, self.body.value)
-        await interaction.response.send_message(url or "Already posted from this draft.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.followup.send(await self.view.post_once(interaction, self.body.value), ephemeral=True)
 
 class DraftView(discord.ui.View):
     """Posts the draft at most once, and marks the event's announcement done."""
@@ -554,14 +552,19 @@ class DraftView(discord.ui.View):
         self.card, self.draft, self.channel_id, self.posted = card, draft, channel_id, False
 
     async def post_once(self, interaction, text):
+        """Post and return what happened. Answer the interaction first: this can take a few seconds."""
         if self.posted:
-            return None
+            return "Already posted from this draft."
         channel = interaction.client.get_channel(self.channel_id)
         if channel is None:
             return "Couldn't find the announcements channel."
-        self.posted = True
+        self.posted = True  # set before the await, so a double click can't post twice
+        try:
+            message = await channel.send(text, allowed_mentions=mentions_in(text))
+        except discord.HTTPException as e:
+            self.posted = False
+            return f"Discord didn't accept the post ({e}). Nothing was posted; try again."
         self.stop()
-        message = await channel.send(text, allowed_mentions=mentions_in(text))
         store.mark(self.card.gid, "announcement", "done")
         print(f"Announcement posted by {interaction.user} ({interaction.user.id})")
         await self.card.redraw()
@@ -569,8 +572,15 @@ class DraftView(discord.ui.View):
 
     @discord.ui.button(label="Post as is", style=discord.ButtonStyle.primary)
     async def post(self, interaction, button):
+        if self.posted:
+            await interaction.response.send_message("Already posted from this draft.", ephemeral=True)
+            return
+        await interaction.response.defer()
         result = await self.post_once(interaction, self.draft)
-        await interaction.response.edit_message(content=result or "Already posted from this draft.", view=None)
+        if self.posted:
+            await interaction.edit_original_response(content=result, view=None)
+        else:
+            await interaction.followup.send(result, ephemeral=True)  # keep the draft and buttons to retry
 
     @discord.ui.button(label="Edit and post", style=discord.ButtonStyle.secondary)
     async def edit(self, interaction, button):
@@ -671,10 +681,7 @@ class NewEventPreview(discord.ui.View):
         now = datetime.datetime.now(TZ)
         if start < now:
             warnings.append("⚠️ That's in the past.")
-        room_of = lambda e: room_state(e, snap.store.get(e['id'], {}))[1]
-        for other, same_room in new_event.overlaps(snap.events, start, end, v["room"], room_of):
-            warnings.append(f"⚠️ {'Same room' if same_room else 'Same time'} as **{other['name']}** "
-                            f"({render.fmt_day(other['start'])}, {other['location'] or 'TBA'}).")
+        warnings += render.clash_lines(clashes(snap, start, end, v["room"]))
         if any(e['name'].casefold() == v["name"].casefold() and e['start'].date() == start.date() for e in snap.events):
             warnings.append("⚠️ An event with this name is already on the calendar that day.")
         days_out = (start - now).days
@@ -716,8 +723,14 @@ class NewEventPreview(discord.ui.View):
         if sync:
             sync.sync_soon(5)
         print(f"New event {v['name']} ({gid}) created by {interaction.user} ({interaction.user.id})")
-        await interaction.edit_original_response(content=f"Created **{v['name']}** in the calendar. Here's its card:")
-        await self.cog.cache.get(fresh=True)
+        note = f"Created **{v['name']}** in the calendar. Here's its card:"
+        snap = await self.cog.cache.get(fresh=True)
+        if snap.event(gid) is None and to_event(item):
+            # Past the board's window: show the card now; it joins the board later
+            snap.events.append(to_event(item))
+            joins = self.start - datetime.timedelta(days=WINDOW_AHEAD_DAYS)
+            note += f"\nIt's more than {WINDOW_AHEAD_DAYS} days out, so it joins `/officer events` around {joins:%b %-d}."
+        await interaction.edit_original_response(content=note)
         await open_card(self.cog, interaction, gid)
 
 
@@ -859,7 +872,11 @@ class MonthPicker(discord.ui.View):
         year, month = map(int, interaction.data["values"][0].split("-"))
         await interaction.response.defer(ephemeral=True, thinking=True)
         embeds, file = await self.cog.monthly_report(year, month)
-        await interaction.followup.send(embeds=embeds, file=discord.File(*file), ephemeral=True)
+        batches = render.split_embeds(embeds)
+        for i, batch in enumerate(batches):
+            last = i == len(batches) - 1
+            await interaction.followup.send(embeds=batch, file=discord.File(*file) if last else discord.utils.MISSING,
+                                            ephemeral=True)
 
 class RemoveDeadline(discord.ui.View):
     def __init__(self, chapter, deadlines):

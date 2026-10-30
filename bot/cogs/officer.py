@@ -8,11 +8,10 @@ from discord.ext import commands, tasks
 
 from bot.cogs import volunteer
 from bot.utils.alerts import alert
-from bot.utils.event_text import same_place
 from bot.officer import render, members, metrics
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
 from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TABLING_SHEET_ID
-from bot.officer.steps import event_steps, problems, owner_of, room_state
+from bot.officer.steps import event_steps, problems, owner_of
 from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton, open_card, open_buttons,
                                OFFICER_ROLE_IDS)
 
@@ -38,10 +37,13 @@ def digest_due(now, last_day):
     """Post on a digest day, once, after DIGEST_HOUR."""
     return now.weekday() in DIGEST_DAYS and now.hour >= DIGEST_HOUR and last_day != now.date().isoformat()
 
+REPORT_CATCH_UP_DAYS = 7  # if the bot was down on the 1st, post when it's back, within this many days
+
 def report_due(now, posted):
-    """Last month's key if its report should post now (the 1st, after REPORT_HOUR), else None."""
+    """Last month's key if its report should post now (from REPORT_HOUR on the 1st), else None."""
     key = metrics.month_key(*metrics.previous_month(now.year, now.month))
-    return key if now.day == 1 and now.hour >= REPORT_HOUR and posted != key else None
+    started = now.day > 1 or now.hour >= REPORT_HOUR
+    return key if started and now.day <= REPORT_CATCH_UP_DAYS and posted != key else None
 
 def due_nudges(open_steps, sent, today):
     """{event id: [steps]} not mentioned in the last NUDGE_REPEAT_DAYS."""
@@ -135,24 +137,6 @@ class Officer(commands.Cog):
                                                        ephemeral=True, wait=True)
 
     # ---------- helpers the views use ----------
-
-    def room_clashes(self, gid):
-        """Other events overlapping gid's time in the same requested or confirmed room."""
-        snap = self.cache.with_store()
-        event = snap.event(gid)
-        if event is None:
-            return []
-        status, room = room_state(event, snap.store.get(gid, {}))
-        if status not in ('requested', 'confirmed') or not room:
-            return []
-        clashes = []
-        for other in snap.events:
-            if other['id'] == gid or not (event['start'] < other['end'] and other['start'] < event['end']):
-                continue
-            other_status, other_room = room_state(other, snap.store.get(other['id'], {}))
-            if other_status in ('requested', 'confirmed') and other_room and same_place(room, other_room):
-                clashes.append(other)
-        return clashes
 
     async def chapter_embeds(self):
         rows = None
@@ -308,8 +292,12 @@ class Officer(commands.Cog):
             print("Error: Could not find the monthly report channel.")
             return
         embeds, file = await self.monthly_report(*map(int, key.split("-")))
-        await channel.send(content="**Monthly report**", embeds=embeds, file=discord.File(*file),
-                           allowed_mentions=discord.AllowedMentions.none())
+        batches = render.split_embeds(embeds)
+        for i, batch in enumerate(batches):
+            last = i == len(batches) - 1
+            await channel.send(content="**Monthly report**" if i == 0 else None, embeds=batch,
+                               file=discord.File(*file) if last else discord.utils.MISSING,
+                               allowed_mentions=discord.AllowedMentions.none())
         if force_month is None:
             state = load_json(metrics.METRICS_FILE, {"months": {}})
             state["posted"] = key

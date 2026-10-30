@@ -53,6 +53,11 @@ def split_embeds(embeds):
 
 # ---------- board ----------
 
+def clash_lines(found, same_room_only=False):
+    return [f"⚠️ {'Same room' if same else 'Same time'} as **{other['name']}** "
+            f"({fmt_day(other['start'])}, {other['location'] or 'TBA'})."
+            for other, same in found if same or not same_room_only]
+
 def phase_icons(steps):
     return " · ".join(f"{phase} {''.join(s.state for s in steps if s.phase == phase)}" for phase in PHASES)
 

@@ -48,9 +48,11 @@ BUILDING_NAMES = {
 UCF_ADDRESS = "12760 Pegasus Dr, Orlando, FL 32816"  # as on our existing vTools events
 CONTACT_EMAIL = "ieeecsucf@gmail.com"
 
+# The one list of words that sort events into kinds. Day-of reminder pings, the
+# default owner and "socials don't need slides" all read it.
 ROLE_WORDS = [
     ('workshops', ('workshop', 'intro to', 'scripting', 'tutorial', 'guide to', 'how to', 'hands-on')),
-    ('socials', ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq')),
+    ('socials', ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq', 'tailgate')),
     ('prodev', ('linkedin', 'career', 'resume', 'interview', 'panel')),
 ]
 

@@ -13,9 +13,10 @@ from bot.utils.alerts import alert
 # /member verify and /member status, for anyone in the server. Each request
 # posts a review card in MEMBER_REVIEW_CHANNEL_ID; an officer checks the number
 # in IEEE's validator and presses Approve (gives DUES_PAYING_ROLE_ID) or Reject.
-# Anyone who already has the role counts as verified: they're recorded when they
-# use a /member command, and, if the Server Members intent is on (MEMBERS_INTENT=1),
-# at startup and whenever the role is added by hand.
+# People who had the role before this existed are recorded as verified once (at
+# startup with MEMBERS_INTENT=1, or when they use /member). An officer adding the
+# role by hand verifies them for the year; removing it takes that back. Holding
+# the role into a new year renews nothing: they verify again with /member verify.
 
 DUES_PAYING_ROLE_ID = int(os.getenv('DUES_PAYING_ROLE_ID', '1428785815789768704'))
 
@@ -24,9 +25,10 @@ def has_role(user):
     return any(role.id == DUES_PAYING_ROLE_ID for role in getattr(user, 'roles', []))
 
 def review_embed(user_id, record):
+    by = f" by <@{record['reviewed_by']}>" if record.get("reviewed_by") else ""
     status = {"pending": "⏳ Waiting for an officer",
-              "verified": f"✅ Verified by <@{record['reviewed_by']}>",
-              "rejected": f"❌ Rejected by <@{record['reviewed_by']}>" + (f": {record['reason']}" if record['reason'] else "")
+              "verified": f"✅ Verified{by}",
+              "rejected": f"❌ Rejected{by}" + (f": {record['reason']}" if record['reason'] else "")
               }[record["status"]]
     embed = create_base_embed(
         title="🪪 IEEE membership check",
@@ -55,6 +57,11 @@ class RejectReason(discord.ui.Modal, title="Reject membership"):
         self.user_id = user_id
 
     async def on_submit(self, interaction):
+        current = members.get(self.user_id)
+        if current is None or current["status"] != "pending":
+            await interaction.response.send_message("Another officer already handled this request; nothing changed.",
+                                                    ephemeral=True)
+            return
         record = members.decide(self.user_id, "rejected", interaction.user.id, self.reason.value)
         await interaction.response.edit_message(embed=review_embed(self.user_id, record), view=None)
         print(f"Membership of {self.user_id} rejected by {interaction.user} ({interaction.user.id})")
@@ -159,8 +166,10 @@ class Members(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_update(self, before, after):
-        if has_role(after) and not has_role(before) and members.recognize(after.id):
+        if has_role(after) and not has_role(before) and members.recognize(after.id, renew=True):
             print(f"Membership: {after} ({after.id}) got Dues Paying by hand; recorded as verified.")
+        elif has_role(before) and not has_role(after) and members.revoke(after.id):
+            print(f"Membership: {after} ({after.id}) lost Dues Paying; verification withdrawn.")
 
     def review_channel(self):
         channel_id = os.getenv('MEMBER_REVIEW_CHANNEL_ID')
@@ -189,8 +198,11 @@ class Members(commands.Cog):
             text = "You haven't asked yet. Use `/member verify`."
         elif record["status"] == "pending":
             text = f"Waiting for an officer (submitted {record['submitted']})."
-        elif record["status"] == "verified":
+        elif record["status"] == "verified" and record["year"] == datetime.date.today().year:
             text = f"✅ Verified for {record['year']}."
+        elif record["status"] == "verified":
+            text = (f"Verified for {record['year']}. IEEE memberships renew every year, "
+                    f"so use `/member verify` for {datetime.date.today().year}.")
         else:
             text = "❌ Not verified" + (f": {record['reason']}" if record["reason"] else "") + \
                    ". Fix it and use `/member verify` again, or ask an officer."

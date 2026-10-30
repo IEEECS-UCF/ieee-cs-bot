@@ -49,20 +49,34 @@ def decide(user_id, status, officer_id, reason="", today=None):
     save_record(user_id, record)
     return record
 
-def recognize(user_id, today=None):
-    """Record someone who already has the Dues Paying role as verified this year.
+def recognize(user_id, today=None, renew=False):
+    """Record someone who has the Dues Paying role as verified this year.
 
-    Covers people given the role before /member verify existed, or by hand.
-    Returns the new record, or None if they were already verified this year.
+    Without renew, only people with no record yet are recorded: that covers
+    the role given before /member verify existed. Memberships are yearly, so
+    still holding the role in a new year doesn't renew anything; renew=True is
+    for an officer adding the role by hand, which is a fresh decision.
+    Returns the new record, or None if nothing changed.
     """
     today = today or datetime.date.today()
     record = get(user_id)
+    if record and not renew:
+        return None
     if record and record["status"] == "verified" and record["year"] == today.year:
         return None
     record = {"number": (record or {}).get("number"), "email": (record or {}).get("email", ""),
               "status": "verified", "source": "role", "year": today.year, "submitted": today.isoformat(),
-              "decided": today.isoformat(),
-              "reviewed_by": None, "reason": "", "card": (record or {}).get("card")}
+              "decided": today.isoformat(), "reviewed_by": None, "reason": "", "card": (record or {}).get("card")}
+    save_record(user_id, record)
+    return record
+
+def revoke(user_id, today=None):
+    """The Dues Paying role was taken away: this year's verification no longer stands."""
+    today = today or datetime.date.today()
+    record = get(user_id)
+    if not record or record["status"] != "verified" or record["year"] != today.year:
+        return None
+    record.update(status="rejected", reason="the Dues Paying role was removed", decided=today.isoformat())
     save_record(user_id, record)
     return record
 

@@ -110,10 +110,22 @@ def test_role_holders_are_recognized_once():
     assert members.recognize(20, today=DAY) is None
     assert members.counts(DAY)[0] == 1
     members.submit(21, "00000005", "", today=DAY)
-    record = members.recognize(21, today=DAY)                    # a pending request is settled by the role
+    assert members.recognize(21, today=DAY) is None              # an open request stays for an officer
+    record = members.recognize(21, today=DAY, renew=True)        # unless an officer hands out the role
     assert record["status"] == "verified" and record["number"] == "00000005"
-    assert members.recognize(20, today=datetime.date(2027, 1, 3))["year"] == 2027
 
+def test_holding_the_role_into_a_new_year_renews_nothing():
+    members.recognize(20, today=DAY)
+    january = datetime.date(2027, 1, 3)
+    assert members.recognize(20, today=january) is None
+    assert members.get(20)["year"] == 2026 and members.counts(january)[0] == 0
+    assert members.recognize(20, today=january, renew=True)["year"] == 2027
+
+def test_losing_the_role_withdraws_this_years_verification():
+    members.recognize(20, today=DAY)
+    assert members.revoke(20, today=DAY)["status"] == "rejected"
+    assert "role was removed" in members.get(20)["reason"] and members.counts(DAY)[0] == 0
+    assert members.revoke(99, today=DAY) is None
 
 async def test_status_recognizes_existing_role_holders():
     cog = members_cog.Members(commands.Bot(command_prefix="!", intents=discord.Intents.none()))
@@ -133,3 +145,21 @@ async def test_role_added_by_hand_is_recorded():
     after = types.SimpleNamespace(id=40, roles=[role])
     await cog.on_member_update(before, after)
     assert members.get(40)["status"] == "verified"
+    await cog.on_member_update(after, before)
+    assert members.get(40)["status"] == "rejected"
+
+async def test_status_tells_last_years_members_to_verify_again():
+    cog = members_cog.Members(commands.Bot(command_prefix="!", intents=discord.Intents.none()))
+    members.recognize(50, today=datetime.date(2025, 5, 1))
+    interaction = interaction_with([members_cog.DUES_PAYING_ROLE_ID])
+    interaction.user.id = 50
+    await members_cog.Members.status.callback(cog, interaction)
+    assert "use `/member verify` for" in interaction.response.sent
+
+async def test_reject_after_someone_approved_changes_nothing():
+    members.submit(10, "00000001", "", today=DAY)
+    modal = members_cog.RejectReason(10)
+    members.decide(10, "verified", 77, today=DAY)               # another officer approved meanwhile
+    interaction = interaction_with([OFFICER])
+    await modal.on_submit(interaction)
+    assert members.get(10)["status"] == "verified" and "already handled" in interaction.response.sent

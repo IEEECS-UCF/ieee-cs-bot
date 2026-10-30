@@ -7,6 +7,7 @@ import discord
 from discord.ext import commands, tasks
 
 from bot.utils.alerts import alert
+from bot.utils.event_text import ROLE_WORDS
 from bot.officer.data import EventStore
 
 STATE_FILE = "data/reminders.json"
@@ -14,14 +15,12 @@ REMINDER_TZ = ZoneInfo(os.getenv('REMINDER_TZ', 'America/New_York'))
 REMINDER_HOUR = int(os.getenv('REMINDER_HOUR', '9'))  # local time, day of the event
 KEEP_DAYS = 30  # how long sent reminders are remembered
 
-# Which role each kind of event pings, matched on words in the event name.
+# Which role each kind of event pings, matched on words in the event name
+# (event_text.ROLE_WORDS).
 # Events that match nothing (GBMs, TechX) are announced without a ping.
 # Officers can override either choice per event from its card (/officer event).
-ROLE_KEYWORDS = [
-    ('workshops', 'REMINDER_ROLE_WORKSHOPS', ('workshop', 'intro to', 'scripting', 'tutorial', 'guide to', 'how to', 'hands-on')),
-    ('socials', 'REMINDER_ROLE_SOCIALS', ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq')),
-    ('prodev', 'REMINDER_ROLE_PRODEV', ('linkedin', 'career', 'resume', 'interview', 'panel')),
-]
+ROLE_ENV = {'workshops': 'REMINDER_ROLE_WORKSHOPS', 'socials': 'REMINDER_ROLE_SOCIALS', 'prodev': 'REMINDER_ROLE_PRODEV'}
+ROLE_KEYWORDS = [(key, ROLE_ENV[key], words) for key, words in ROLE_WORDS]
 PING_CHOICES = {'auto', 'none', 'everyone'} | {key for key, _, _ in ROLE_KEYWORDS}
 SEND_CHOICES = {'auto', 'always', 'never'}
 

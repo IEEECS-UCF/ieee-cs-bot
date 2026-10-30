@@ -1,12 +1,11 @@
-import os
 import re
-import json
 import uuid
 
 import discord
 from discord.ext import commands
 
 from bot.utils.formatting import create_base_embed, IEEE_BLUE
+from bot.officer.data import load_json, save_json
 
 # Volunteer board: tasks posted with Claim/Unclaim buttons that any member can
 # press. Officers add and close tasks from /officer chapter.
@@ -15,17 +14,10 @@ TASKS_FILE = "data/tasks.json"
 
 
 def load_tasks():
-    if not os.path.exists(TASKS_FILE):
-        return {}
-    with open(TASKS_FILE) as f:
-        return json.load(f)
+    return load_json(TASKS_FILE, {})
 
 def save_tasks(tasks):
-    os.makedirs(os.path.dirname(TASKS_FILE), exist_ok=True)
-    tmp = TASKS_FILE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(tasks, f, indent=2)
-    os.replace(tmp, TASKS_FILE)
+    save_json(TASKS_FILE, tasks)
 
 def new_task(title, when, details, slots, created_by, key=None):
     return {"id": uuid.uuid4().hex[:10], "title": title[:200], "when": when or "", "details": details or "",

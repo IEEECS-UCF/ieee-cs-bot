@@ -29,10 +29,18 @@ SKIPPED = "not needed"
 
 
 def load_json(path, default):
+    """The file's data, or default if it's missing. A corrupt file is moved
+    aside (never overwritten) so the bot keeps working and nothing is lost."""
     if not os.path.exists(path):
         return default
-    with open(path) as f:
-        return json.load(f)
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        aside = f"{path}.corrupt-{datetime.datetime.now():%Y%m%d-%H%M%S}"
+        os.replace(path, aside)
+        print(f"ERROR: {path} was unreadable ({e}); moved it to {aside} and started fresh.")
+        return default
 
 def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
