@@ -1,7 +1,7 @@
 import re
 from bs4 import BeautifulSoup
 
-# Text built from a calendar event (the dicts officer_tools.fetch_calendar
+# Text built from a calendar event (the dicts officer.sources.fetch_calendar
 # returns): copy-paste blocks for KnightConnect and vTools, and drafts for
 # #announcements and Instagram. Nothing here posts anything.
 
@@ -49,7 +49,7 @@ UCF_ADDRESS = "12760 Pegasus Dr, Orlando, FL 32816"  # as on our existing vTools
 CONTACT_EMAIL = "ieeecsucf@gmail.com"
 
 ROLE_WORDS = [
-    ('workshops', ('workshop', 'intro to', 'scripting', 'tutorial')),
+    ('workshops', ('workshop', 'intro to', 'scripting', 'tutorial', 'guide to', 'how to', 'hands-on')),
     ('socials', ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq')),
     ('prodev', ('linkedin', 'career', 'resume', 'interview', 'panel')),
 ]

@@ -7,18 +7,18 @@ import discord
 from discord.ext import commands, tasks
 
 from bot.utils.alerts import alert
+from bot.officer.data import EventStore
 
 STATE_FILE = "data/reminders.json"
-OVERRIDES_FILE = "data/reminder_overrides.json"  # Discord event ID -> {"send": ..., "ping": ...}
 REMINDER_TZ = ZoneInfo(os.getenv('REMINDER_TZ', 'America/New_York'))
 REMINDER_HOUR = int(os.getenv('REMINDER_HOUR', '9'))  # local time, day of the event
-KEEP_DAYS = 30  # how long sent reminders and overrides are remembered
+KEEP_DAYS = 30  # how long sent reminders are remembered
 
 # Which role each kind of event pings, matched on words in the event name.
 # Events that match nothing (GBMs, TechX) are announced without a ping.
-# Officers can override either choice per event with /officer reminders set.
+# Officers can override either choice per event from its card (/officer event).
 ROLE_KEYWORDS = [
-    ('workshops', 'REMINDER_ROLE_WORKSHOPS', ('workshop', 'intro to', 'scripting', 'tutorial')),
+    ('workshops', 'REMINDER_ROLE_WORKSHOPS', ('workshop', 'intro to', 'scripting', 'tutorial', 'guide to', 'how to', 'hands-on')),
     ('socials', 'REMINDER_ROLE_SOCIALS', ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq')),
     ('prodev', 'REMINDER_ROLE_PRODEV', ('linkedin', 'career', 'resume', 'interview', 'panel')),
 ]
@@ -103,7 +103,6 @@ class EventReminders(commands.Cog):
 
         os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
         self.state = self.load_json(STATE_FILE, {"sent": {}})
-        self.overrides = self.load_json(OVERRIDES_FILE, {})
         if self.channel_id:
             self.send_reminders.start()
         else:
@@ -134,19 +133,11 @@ class EventReminders(commands.Cog):
     def save_state(self):
         self.save_json(STATE_FILE, self.state)
 
-    def set_override(self, event, send=None, ping=None):
-        """Store an officer's choice for one event; 'auto' on both clears it."""
-        current = self.overrides.get(str(event.id), {})
-        if send:
-            current['send'] = send
-        if ping:
-            current['ping'] = ping
-        current['start'] = event.start_time.isoformat()
-        if current.get('send', 'auto') == 'auto' and current.get('ping', 'auto') == 'auto':
-            self.overrides.pop(str(event.id), None)
-        else:
-            self.overrides[str(event.id)] = current
-        self.save_json(OVERRIDES_FILE, self.overrides)
+    def override_for(self, event):
+        """The officer's reminder settings for a Discord event, via its calendar event."""
+        sync = self.bot.get_cog("CalendarSync")
+        gid = next((g for g, d in sync.state["event_map"].items() if d == event.id), None) if sync else None
+        return EventStore().get(gid).get('reminder') if gid else None
 
     # ---------- what is due ----------
 
@@ -190,7 +181,7 @@ class EventReminders(commands.Cog):
             key = str(event.id)
             if key in sent:
                 continue
-            override = self.overrides.get(key)
+            override = self.override_for(event)
             send, why = should_send(event, override)
             if not send:
                 print(f"Not posting reminder for {event.name}: {why}")
@@ -206,37 +197,6 @@ class EventReminders(commands.Cog):
             if datetime.datetime.fromisoformat(when) < cutoff:
                 del sent[key]
         self.save_state()
-        stale = [k for k, o in self.overrides.items() if datetime.datetime.fromisoformat(o['start']) < cutoff]
-        if stale:
-            for key in stale:
-                del self.overrides[key]
-            self.save_json(OVERRIDES_FILE, self.overrides)
-
-    # ---------- preview ----------
-
-    def preview_lines(self, guild, days=7):
-        """What will post in the next few days, for /officer reminders preview."""
-        today = datetime.datetime.now(REMINDER_TZ).date()
-        lines = []
-        for event in sorted(guild.scheduled_events, key=lambda e: e.start_time):
-            day = event.start_time.astimezone(REMINDER_TZ).date()
-            if event.status != discord.EventStatus.scheduled or not 0 <= (day - today).days <= days:
-                continue
-            override = self.overrides.get(str(event.id))
-            send, why = should_send(event, override)
-            if str(event.id) in self.state["sent"]:
-                status = "already posted"
-            elif not send:
-                status = why
-            else:
-                status = f"posts {day:%a} at {REMINDER_HOUR}:00" + (f" ({why})" if why else "")
-            if override and override.get('ping', 'auto') != 'auto':
-                status += f" · ping set to {override['ping']}"
-            content, _ = build_message(event, guild.id, override)
-            quoted = "\n".join(f"> {line}" for line in content.splitlines())
-            lines.append(f"**{event.name}** · {status}\n{quoted}")
-        return lines or [f"No events in the next {days} days."]
-
 
 async def setup(bot):
     await bot.add_cog(EventReminders(bot))

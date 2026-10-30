@@ -9,7 +9,7 @@ from discord.ext import commands
 from bot.utils.formatting import create_base_embed, IEEE_BLUE
 
 # Volunteer board: tasks posted with Claim/Unclaim buttons that any member can
-# press. Officers create and close tasks with /officer task (officer_tools).
+# press. Officers add and close tasks from /officer chapter.
 # The buttons' custom IDs carry the task ID, so they keep working after restarts.
 TASKS_FILE = "data/tasks.json"
 
