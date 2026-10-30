@@ -25,6 +25,9 @@ TABLING_SHEET_ID = os.getenv('TABLING_SHEET_ID')
 DEADLINES_FILE = "bot/deadlines.json"
 DIGEST_STATE_FILE = "data/digest.json"
 CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
+WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked
+GITHUB_ORG = os.getenv('GITHUB_ORG', 'IEEECS-UCF')
+NOT_SLIDE_REPOS = {'website', 'ieeecs-ucf.github.io', 'ieee-cs-bot'}
 
 VTOOLS_LOOKBACK_DAYS = 90
 EVENTS_LOOKAHEAD_DAYS = 45
@@ -35,6 +38,8 @@ DIGEST_WEEKDAY = 0         # Monday
 DIGEST_HOUR = 10           # local time, after the 9 AM weekly summary
 CHECKIN_PICK_BACK_DAYS = 2    # events offered by /officer checkin create
 CHECKIN_PICK_AHEAD_DAYS = 30
+WRAPUP_LOOKBACK_DAYS = 21     # events still shown in the wrap-up checklist
+SLIDES_WINDOW_DAYS = 10       # a repo created this soon after an event may hold its slides
 
 EMBED_LIMIT = 4000
 
@@ -94,6 +99,26 @@ def save_checkins(checkins):
         json.dump(checkins, f, indent=2)
     os.replace(tmp, CHECKINS_FILE)
 
+def load_wrapups():
+    if not os.path.exists(WRAPUPS_FILE):
+        return {}
+    with open(WRAPUPS_FILE) as f:
+        return json.load(f)
+
+def save_wrapups(wrapups):
+    tmp = WRAPUPS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(wrapups, f, indent=2)
+    os.replace(tmp, WRAPUPS_FILE)
+
+async def fetch_repos(session):
+    """The org's public GitHub repos (unauthenticated: 60 requests/hour is plenty)."""
+    url = f"https://api.github.com/orgs/{GITHUB_ORG}/repos?per_page=100"
+    async with session.get(url, headers={"Accept": "application/vnd.github+json"},
+                           timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        resp.raise_for_status()
+        return [r for r in await resp.json() if r['name'] not in NOT_SLIDE_REPOS]
+
 def load_deadlines():
     if not os.path.exists(DEADLINES_FILE):
         return []
@@ -145,27 +170,38 @@ async def checkin_note(event, checkins):
         return f" · check-in unavailable ({e})"
     return f" · check-in: **{r['ieee']} IEEE, {r['guests']} guests**"
 
-async def check_vtools(events):
+def reportable(events):
+    """Past events that should be in vTools (tabling isn't an event we report)."""
     now = datetime.datetime.now(TZ)
-    checkins = load_checkins()
-    # Tabling isn't an event we report
-    past = [e for e in events if e['end'] < now and 'tabling' not in e['name'].casefold()]
-    lines, cache = [], {}
+    return [e for e in events if e['end'] < now and 'tabling' not in e['name'].casefold()]
+
+async def vtools_matches(events):
+    """The vTools record (or None) for each event, keyed by calendar event ID."""
+    matches, cache = {}, {}
     async with aiohttp.ClientSession() as session:
-        for e in past:
+        for e in events:
             day = e['start'].date()
             if day not in cache:
                 cache[day] = await fetch_branch_events(session, day, BRANCH_SPOID)
-            match = best_match(e, cache[day])
-            label = f"`{fmt_day(e['start'])}` {e['name']}"
-            if match is None:
-                lines.append(f"❌ {label}: **not in vTools**" + await checkin_note(e, checkins))
-            elif match.get('ieee-attending') is None:
-                lines.append(f"⚠️ {label}: in vTools, **no attendance filed** · <{match['link']}>"
-                             + await checkin_note(e, checkins))
-            else:
-                ieee, guests = match['ieee-attending'], match.get('guests-attending') or 0
-                lines.append(f"✅ {label}: {ieee + guests} ({ieee} IEEE, {guests} guests)")
+            matches[e['id']] = best_match(e, cache[day])
+    return matches
+
+async def check_vtools(events):
+    checkins = load_checkins()
+    past = reportable(events)
+    matches = await vtools_matches(past)
+    lines = []
+    for e in past:
+        match = matches[e['id']]
+        label = f"`{fmt_day(e['start'])}` {e['name']}"
+        if match is None:
+            lines.append(f"❌ {label}: **not in vTools**" + await checkin_note(e, checkins))
+        elif match.get('ieee-attending') is None:
+            lines.append(f"⚠️ {label}: in vTools, **no attendance filed** · <{match['link']}>"
+                         + await checkin_note(e, checkins))
+        else:
+            ieee, guests = match['ieee-attending'], match.get('guests-attending') or 0
+            lines.append(f"✅ {label}: {ieee + guests} ({ieee} IEEE, {guests} guests)")
     return lines or [f"No calendar events in the last {VTOOLS_LOOKBACK_DAYS} days."]
 
 def best_match(event, candidates):
@@ -213,6 +249,90 @@ def check_deadlines():
     return lines or ["No deadlines in the next 90 days."]
 
 
+# ---------- post-event wrap-up ----------
+
+SOCIAL_WORDS = ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq', 'tailgate')
+DONE, TODO, SKIP = "✅", "⬜", "➖"
+
+def plain(name):
+    return " ".join(name.replace('-', ' ').replace('_', ' ').casefold().split())
+
+def match_slides(events, repos):
+    """Repo holding each event's slides: by name first, then a lone repo created soon after."""
+    found, claimed = {}, set()
+    for e in events:
+        best, score = None, 0.0
+        for r in repos:
+            ratio = difflib.SequenceMatcher(None, plain(e['name']), plain(r['name'])).ratio()
+            if ratio > score:
+                best, score = r, ratio
+        if best and score >= 0.6:
+            found[e['id']] = best
+            claimed.add(best['name'])
+    for e in events:
+        if e['id'] in found:
+            continue
+        window_start = e['start'] - datetime.timedelta(days=1)
+        window_end = e['start'] + datetime.timedelta(days=SLIDES_WINDOW_DAYS)
+        nearby = [r for r in repos if r['name'] not in claimed
+                  and window_start <= parser.isoparse(r['created_at']).astimezone(TZ) <= window_end]
+        if len(nearby) == 1:
+            found[e['id']] = nearby[0]
+            claimed.add(nearby[0]['name'])
+    return found
+
+async def wrapup_rows(events):
+    """[(event, [(item, state, note)])] for events that ended in the last few weeks."""
+    now = datetime.datetime.now(TZ)
+    recent = [e for e in reportable(events) if e['end'] >= now - datetime.timedelta(days=WRAPUP_LOOKBACK_DAYS)]
+    if not recent:
+        return []
+    matches = await vtools_matches(recent)
+    async with aiohttp.ClientSession() as session:
+        try:
+            repos = await fetch_repos(session)
+        except Exception as e:
+            print(f"GitHub repo list failed: {e}")
+            repos = []
+    slides = match_slides(recent, repos)
+    checkins, marks = load_checkins(), load_wrapups()
+
+    rows = []
+    for e in recent:
+        mine = marks.get(e['id'], {})
+        items = []
+        form = checkins.get(e['id'])
+        if form:
+            try:
+                r = await checkin_client.results(form['formId'])
+                items.append(("check-in", DONE, f"{r['total']} ({r['ieee']} IEEE)"))
+            except Exception:
+                items.append(("check-in", TODO, "unreadable"))
+        match = matches[e['id']]
+        items.append(("vTools", DONE if match and match.get('ieee-attending') is not None else TODO, ""))
+        if any(w in e['name'].casefold() for w in SOCIAL_WORDS) or mine.get('slides') == 'not needed':
+            items.append(("slides", SKIP, ""))
+        elif e['id'] in slides:
+            items.append(("slides", DONE, slides[e['id']]['name']))
+        else:
+            items.append(("slides", DONE if mine.get('slides') == 'done' else TODO, ""))
+        recap = mine.get('recap')
+        items.append(("recap", SKIP if recap == 'not needed' else (DONE if recap == 'done' else TODO), ""))
+        rows.append((e, items))
+    return rows
+
+def format_wrapups(rows, open_only=False):
+    lines = []
+    for e, items in rows:
+        if open_only and not any(state == TODO for _, state, _ in items):
+            continue
+        parts = [f"{state} {item}" + (f" ({note})" if note else "") for item, state, note in items]
+        lines.append(f"`{fmt_day(e['start'])}` **{e['name']}**: " + " · ".join(parts))
+    if not lines:
+        return ["All wrapped up."] if rows else [f"No events in the last {WRAPUP_LOOKBACK_DAYS} days."]
+    return lines
+
+
 def build_embed(title, lines, color=IEEE_BLUE, footer=None):
     text = ""
     for line in lines:
@@ -240,10 +360,14 @@ class OfficerTools(commands.Cog):
     checkin = app_commands.Group(
         name="checkin", description="Event check-in forms and attendance counts.", parent=officer,
     )
+    wrapup = app_commands.Group(
+        name="wrapup", description="After-event checklist: vTools, slides, recap.", parent=officer,
+    )
 
     def __init__(self, bot):
         self.bot = bot
         self._pick_cache = (None, [])  # (fetched at, events) for autocomplete
+        self._recent_cache = (None, [])
         channel = os.getenv('OFFICER_DIGEST_CHANNEL_ID')
         self.digest_channel_id = int(channel) if channel else None
         if self.digest_channel_id:
@@ -372,6 +496,48 @@ class OfficerTools(commands.Cog):
         await interaction.followup.send(embed=build_embed(f"🧾 Check-in results: {form['name']} ({form['day']})", lines, IEEE_GOLD),
                                         ephemeral=True)
 
+    # ---------- wrap-up ----------
+
+    async def recent_events(self):
+        fetched, events = self._recent_cache
+        now = datetime.datetime.now(TZ)
+        if fetched is None or (now - fetched).total_seconds() > 300:
+            events = reportable(await self.calendar(WRAPUP_LOOKBACK_DAYS, 0))
+            self._recent_cache = (now, events)
+        return events
+
+    async def recent_autocomplete(self, interaction: discord.Interaction, current: str):
+        events = sorted(await self.recent_events(), key=lambda e: e['start'], reverse=True)
+        return [app_commands.Choice(name=f"{fmt_day(e['start'])} · {e['name']}"[:100], value=e['id'])
+                for e in events if current.casefold() in e['name'].casefold()][:25]
+
+    @wrapup.command(name="status", description="What's still open for events from the last three weeks.")
+    async def wrapup_status(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        rows = await wrapup_rows(await self.calendar(WRAPUP_LOOKBACK_DAYS, 0))
+        await interaction.followup.send(embed=build_embed(
+            "🧹 Event wrap-up", format_wrapups(rows), footer="Mark slides or recaps with /officer wrapup mark."), ephemeral=True)
+
+    @wrapup.command(name="mark", description="Mark an event's slides or recap post as done (or not needed).")
+    @app_commands.describe(event="A recent event", item="What to mark", state="Done, or not needed for this event")
+    @app_commands.autocomplete(event=recent_autocomplete)
+    @app_commands.choices(
+        item=[app_commands.Choice(name="Slides on GitHub", value="slides"),
+              app_commands.Choice(name="Recap post (Instagram/LinkedIn)", value="recap")],
+        state=[app_commands.Choice(name="Done", value="done"),
+               app_commands.Choice(name="Not needed", value="not needed")])
+    async def wrapup_mark(self, interaction: discord.Interaction, event: str,
+                          item: app_commands.Choice[str], state: app_commands.Choice[str]):
+        match = next((e for e in await self.recent_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.response.send_message("Pick an event from the list.", ephemeral=True)
+            return
+        marks = load_wrapups()
+        marks.setdefault(event, {})[item.value] = state.value
+        save_wrapups(marks)
+        await interaction.response.send_message(
+            f"Marked **{item.name}** as **{state.name.lower()}** for {match['name']} ({fmt_day(match['start'])}).", ephemeral=True)
+
     # ---------- Monday digest (off unless configured) ----------
 
     @tasks.loop(minutes=30)
@@ -404,6 +570,7 @@ class OfficerTools(commands.Cog):
         embeds = [
             build_embed("📅 Upcoming events check", check_events(events)),
             build_embed("🧾 vTools reporting", [l for l in await check_vtools(events) if not l.startswith("✅")] or ["All caught up."], IEEE_GOLD),
+            build_embed("🧹 Event wrap-up", format_wrapups(await wrapup_rows(events), open_only=True)),
             build_embed("🪧 Tabling", await check_tabling()),
             build_embed("⏰ Deadlines", check_deadlines(), IEEE_GOLD),
         ]
