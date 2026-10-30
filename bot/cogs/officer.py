@@ -18,7 +18,7 @@ from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton
 
 # The officer tools, built around one idea: every event has a status (its
 # steps, in four phases), and every screen shows that same status.
-#   /officer events   the board: every active event, one line each
+#   /officer events   the board: every active event, one line each, and New event
 #   /officer event    one event's card, with a menu that fixes each step
 #   /officer chapter  deadlines, tabling, volunteer tasks, members, monthly report
 # The digest (DIGEST_DAYS) and the daily nudges are drawn from the same steps.

@@ -10,14 +10,14 @@ import discord
 from bot.utils import event_text, checkin_client
 from bot.utils import knightconnect_client as kc
 from bot.utils.vtools_client import fetch_event as fetch_vtools_event, parse_event_id
-from bot.utils.gcal_client import patch_event
+from bot.utils.gcal_client import patch_event, insert_event
 from bot.utils.event_text import same_place
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.cogs import volunteer
 from bot.officer.data import EventStore, SKIPPED, add_deadline, remove_deadline, load_deadlines, deadline_key
 from bot.officer.sources import TZ, fetch_repos, fetch_tabling, TABLING_SHEET_ID
-from bot.officer.steps import event_steps, owner_of, PROBLEMS
-from bot.officer import render
+from bot.officer.steps import event_steps, owner_of, room_state, PROBLEMS
+from bot.officer import render, new_event
 
 # The interactive parts of the officer tools. Every view here is ephemeral
 # (only the officer who opened it sees it) except OpenEventButton, which sits
@@ -479,6 +479,129 @@ class BoardView(discord.ui.View):
 
     async def open(self, interaction):
         await open_card(self.cog, interaction, interaction.data["values"][0])
+
+    @discord.ui.button(label="New event", style=discord.ButtonStyle.success, row=1)
+    async def new(self, interaction, button):
+        await interaction.response.send_modal(NewEventModal(self.cog))
+
+
+# ---------- new event ----------
+
+class NewEventModal(discord.ui.Modal, title="New event"):
+    """Creates the calendar event (after a preview); calendar sync makes the Discord event."""
+    def __init__(self, cog, values=None):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.cog, v = cog, values or {}
+        self.name = discord.ui.TextInput(label="Title", max_length=100, default=v.get("name"))
+        self.date = discord.ui.TextInput(label="Date", placeholder="11/20", max_length=30, default=v.get("date"))
+        self.time = discord.ui.TextInput(label="Time", placeholder="6:30-8:30 PM (2 hours if no end)", max_length=40,
+                                         default=v.get("time"))
+        self.room = discord.ui.TextInput(label="Room (blank if not requested yet)", required=False, max_length=100,
+                                         placeholder="ENG2 205", default=v.get("room"))
+        self.description = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, required=False,
+                                                max_length=1000, default=v.get("description"))
+        for item in (self.name, self.date, self.time, self.room, self.description):
+            self.add_item(item)
+
+    async def on_submit(self, interaction):
+        values = {"name": " ".join(self.name.value.split()), "date": self.date.value.strip(), "time": self.time.value.strip(),
+                  "room": " ".join(self.room.value.split()), "description": self.description.value.strip()}
+        try:
+            start, end = new_event.parse_form(values["date"], values["time"], datetime.datetime.now(TZ))
+        except ValueError as e:
+            await interaction.response.send_message(f"{e}", view=NewEventRetry(self.cog, values), ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        preview = NewEventPreview(self.cog, values, start, end)
+        await interaction.followup.send(embed=await preview.embed(), view=preview, ephemeral=True)
+
+class NewEventRetry(discord.ui.View):
+    def __init__(self, cog, values):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.cog, self.values = cog, values
+
+    @discord.ui.button(label="Fix it", style=discord.ButtonStyle.primary)
+    async def fix(self, interaction, button):
+        await interaction.response.send_modal(NewEventModal(self.cog, self.values))
+
+class NewEventPreview(discord.ui.View):
+    def __init__(self, cog, values, start, end):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.cog, self.values, self.start, self.end = cog, values, start, end
+        if values["room"]:
+            self.add_button("Create · room confirmed", discord.ButtonStyle.success, "confirmed")
+            self.add_button("Create · room only requested", discord.ButtonStyle.primary, "requested")
+        else:
+            self.add_button("Create", discord.ButtonStyle.success, None)
+
+    def add_button(self, label, style, status):
+        button = discord.ui.Button(label=label, style=style)
+        async def create(interaction):
+            await self.create(interaction, status)
+        button.callback = create
+        self.add_item(button)
+
+    async def embed(self):
+        v, start, end = self.values, self.start, self.end
+        snap = await self.cog.cache.get()
+        owner, _ = owner_of({"name": v["name"]}, {})
+        lines = [f"🕒 {start:%a %b %-d, %Y} · {start:%-I:%M %p} – {end:%-I:%M %p}",
+                 f"📍 {v['room'] or 'TBA (no room yet)'}",
+                 f"👤 Owner: <@{owner}> (default; change it on the card)" if owner else "👤 Owner: nobody yet (set it on the card)"]
+        if v["description"]:
+            lines.append("\n" + v["description"][:500])
+        warnings = []
+        now = datetime.datetime.now(TZ)
+        if start < now:
+            warnings.append("⚠️ That's in the past.")
+        room_of = lambda e: room_state(e, snap.store.get(e['id'], {}))[1]
+        for other, same_room in new_event.overlaps(snap.events, start, end, v["room"], room_of):
+            warnings.append(f"⚠️ {'Same room' if same_room else 'Same time'} as **{other['name']}** "
+                            f"({render.fmt_day(other['start'])}, {other['location'] or 'TBA'}).")
+        if any(e['name'].casefold() == v["name"].casefold() and e['start'].date() == start.date() for e in snap.events):
+            warnings.append("⚠️ An event with this name is already on the calendar that day.")
+        days_out = (start - now).days
+        lines += [""] + warnings + [
+            "This adds it to the chapter's Google Calendar. The public Discord event follows "
+            + ("within a few minutes." if days_out <= 30 else f"{days_out - 30} days from now, 30 days before it starts.")]
+        if v["room"]:
+            lines.append("Only a **confirmed** room goes on the calendar; a requested one is tracked on the card until it's confirmed.")
+        return create_base_embed(title=f"New event: {v['name']}", description="\n".join(lines), color=IEEE_GOLD)
+
+    @discord.ui.button(label="Edit", style=discord.ButtonStyle.secondary, row=1)
+    async def edit(self, interaction, button):
+        await interaction.response.send_modal(NewEventModal(self.cog, self.values))
+        self.stop()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
+    async def cancel(self, interaction, button):
+        await interaction.response.edit_message(content="Cancelled; nothing was created.", embed=None, view=None)
+        self.stop()
+
+    async def create(self, interaction, status):
+        if self.is_finished():
+            await interaction.response.send_message("This was already created or cancelled.", ephemeral=True)
+            return
+        self.stop()
+        v = self.values
+        await interaction.response.edit_message(content=f"Creating **{v['name']}**…", embed=None, view=None)
+        body = new_event.calendar_body(v["name"], self.start, self.end, v["description"],
+                                       v["room"] if status == "confirmed" else "")
+        try:
+            item = await asyncio.to_thread(insert_event, os.getenv('GOOGLE_CALENDAR_ID'), body)
+        except Exception as e:
+            await interaction.edit_original_response(content=f"Couldn't create it in Google Calendar ({e}). Nothing was created.")
+            return
+        gid = item['id']
+        if v["room"]:
+            store.set_room(gid, status, v["room"], interaction.user.id)
+        sync = interaction.client.get_cog("CalendarSync")
+        if sync:
+            sync.sync_soon(5)
+        print(f"New event {v['name']} ({gid}) created by {interaction.user} ({interaction.user.id})")
+        await interaction.edit_original_response(content=f"Created **{v['name']}** in the calendar. Here's its card:")
+        await self.cog.cache.get(fresh=True)
+        await open_card(self.cog, interaction, gid)
 
 
 # ---------- the Open button on nudges and the digest ----------
