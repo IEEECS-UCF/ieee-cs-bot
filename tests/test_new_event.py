@@ -123,3 +123,64 @@ async def test_create_confirmed_room_goes_on_the_calendar(monkeypatch):
     await preview.create(interaction, "confirmed")
     assert inserted[0]["location"] == "ENG2 205" and EventStore().get("g2")["room"]["status"] == "confirmed"
     assert calls["content"].startswith("Created **Intro to gem5**")
+
+
+# ---------- edit and delete from the card ----------
+
+class FakeFollowup:
+    def __init__(self):
+        self.sent = []
+    async def send(self, text, **kwargs):
+        self.sent.append(text)
+
+def card_for(e):
+    redraws = []
+    async def redraw(fresh=False):
+        redraws.append(fresh)
+    card = types.SimpleNamespace(gid=e["id"], cog=types.SimpleNamespace(cache=FakeCache(snapshot([e]))),
+                                 redraw=redraw, message=None, redraws=redraws)
+    return card
+
+def edit_interaction():
+    response = FakeResponse()
+    async def defer(**kwargs):
+        response.edited = {}
+    response.defer = defer
+    return types.SimpleNamespace(user=types.SimpleNamespace(id=5), response=response, followup=FakeFollowup(),
+                                 client=types.SimpleNamespace(get_cog=lambda name: None))
+
+async def test_edit_patches_only_what_changed(monkeypatch):
+    patched = []
+    monkeypatch.setattr(views, "patch_event", lambda cal, gid, body: patched.append((gid, body)))
+    e = event(gid="g1", days=10)
+    card = card_for(e)
+    modal = views.EditModal(card, e)
+    assert modal.date.default == f"{e['start']:%m/%d/%Y}" and modal.time.default == "6:30 PM-8:30 PM"
+    modal.time._value = "7-9 PM"
+    interaction = edit_interaction()
+    await modal.on_submit(interaction)
+    gid, body = patched[0]
+    assert gid == "g1" and set(body) == {"start", "end"} and body["start"]["dateTime"].endswith("19:00:00-05:00")
+    assert "time → **" in interaction.followup.sent[0] and card.redraws
+
+async def test_edit_with_no_changes_does_nothing(monkeypatch):
+    monkeypatch.setattr(views, "patch_event", lambda *a: pytest.fail("should not patch"))
+    e = event(gid="g1", days=10)
+    modal = views.EditModal(card_for(e), e)
+    interaction = edit_interaction()
+    await modal.on_submit(interaction)
+    assert interaction.response.sent == "Nothing changed."
+
+async def test_delete_removes_it_from_the_calendar(monkeypatch):
+    deleted = []
+    monkeypatch.setattr(views, "delete_calendar_event", lambda cal, gid: deleted.append(gid))
+    e = event(gid="g1", days=10)
+    card = card_for(e)
+    confirm = views.DeleteConfirm(card, e)
+    interaction = edit_interaction()
+    await confirm.delete.callback(interaction)
+    assert deleted == ["g1"] and card.cog.cache.snapshot.events == []
+    assert interaction.response.edited["content"].startswith("Deleted **Bash Scripting Workshop**")
+    again = edit_interaction()
+    await confirm.delete.callback(again)
+    assert again.response.sent == "Already handled." and deleted == ["g1"]

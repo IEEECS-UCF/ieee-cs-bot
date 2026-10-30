@@ -10,7 +10,7 @@ import discord
 from bot.utils import event_text, checkin_client
 from bot.utils import knightconnect_client as kc
 from bot.utils.vtools_client import fetch_event as fetch_vtools_event, parse_event_id
-from bot.utils.gcal_client import patch_event, insert_event
+from bot.utils.gcal_client import patch_event, insert_event, delete_event as delete_calendar_event
 from bot.utils.event_text import same_place
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.cogs import volunteer
@@ -29,6 +29,7 @@ store = EventStore()
 
 ACTIONS = [
     # (action key, menu label, description)
+    ("edit", "Edit details", "Title, date, time, description"),
     ("owner", "Set owner", "Who gets this event's nudges"),
     ("room", "Room request", "Requested, confirmed or denied"),
     ("copy:knightconnect", "KnightConnect: copy fields", "Laid out for KnightConnect's form"),
@@ -41,6 +42,7 @@ ACTIONS = [
     ("attendance", "Attendance for vTools", "Counts to type into the vTools report"),
     ("slides", "Link slides", "A repo or any link"),
     ("mark", "Mark a step", "Done, not needed, or undo"),
+    ("delete", "Delete event", "From Google Calendar and Discord"),
 ]
 MARKABLE = [("description", "Description"), ("flyer", "Flyer"), ("announcement", "Announcement"),
             ("checkin", "Check-in"), ("slides", "Slides"), ("recap", "Recap post")]
@@ -100,8 +102,11 @@ class CardView(discord.ui.View):
         handler = {
             "owner": self.do_owner, "room": self.do_room, "draft": self.do_draft, "reminder": self.do_reminder,
             "checkin": self.do_checkin, "attendance": self.do_attendance, "slides": self.do_slides, "mark": self.do_mark,
+            "edit": self.do_edit, "delete": self.do_delete,
         }.get(action)
-        if action.startswith("copy:"):
+        if event is None and action in ("edit", "delete"):
+            await interaction.response.send_message("That event isn't in the calendar anymore.", ephemeral=True)
+        elif action.startswith("copy:"):
             await self.do_copy(interaction, event, action.split(":")[1])
         elif action.startswith("link:"):
             await interaction.response.send_modal(LinkModal(self, action.split(":")[1]))
@@ -198,8 +203,120 @@ class CardView(discord.ui.View):
     async def do_mark(self, interaction, event):
         await interaction.response.send_message("Which step?", view=MarkPicker(self), ephemeral=True)
 
+    async def do_edit(self, interaction, event):
+        await interaction.response.send_modal(EditModal(self, event))
+
+    async def do_delete(self, interaction, event):
+        past = event['start'] < datetime.datetime.now(TZ)
+        text = (f"Delete **{event['name']}** ({render.fmt_day(event['start'])})? It comes off Google Calendar now "
+                "(kept in the calendar's trash for 30 days) and off Discord within a few minutes."
+                + ("\n⚠️ It already happened, so it would also drop out of the monthly report." if past else ""))
+        await interaction.response.send_message(text, view=DeleteConfirm(self, event), ephemeral=True)
+
 
 # ---------- action pickers and forms ----------
+
+class EditModal(discord.ui.Modal, title="Edit event"):
+    """Changes the calendar event; calendar sync carries it to Discord."""
+    def __init__(self, card, event):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.card, self.event = card, event
+        start, end = event['start'], event['end']
+        self.name = discord.ui.TextInput(label="Title", max_length=100, default=event['name'])
+        self.date = discord.ui.TextInput(label="Date", max_length=30, default=f"{start:%m/%d/%Y}")
+        self.time = discord.ui.TextInput(label="Time", max_length=40, default=f"{start:%-I:%M %p}-{end:%-I:%M %p}")
+        for item in (self.name, self.date, self.time):
+            self.add_item(item)
+        # Discord caps a text box at 4000 characters; longer descriptions are edited in the calendar
+        self.description = None
+        if len(event['description']) <= 4000:
+            self.description = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, required=False,
+                                                    max_length=4000, default=event['description'] or None)
+            self.add_item(self.description)
+
+    async def on_submit(self, interaction):
+        e = self.event
+        try:
+            start, end = new_event.parse_form(self.date.value, self.time.value, datetime.datetime.now(TZ))
+        except ValueError as err:
+            await interaction.response.send_message(f"{err} Nothing was changed.", ephemeral=True)
+            return
+        body, changes = {}, []
+        name = " ".join(self.name.value.split())
+        if name != e['name']:
+            body['summary'] = name
+            changes.append(f"title → **{name}**")
+        if start != e['start'] or end != e['end']:
+            body['start'] = {"dateTime": start.isoformat(), "timeZone": str(TZ)}
+            body['end'] = {"dateTime": end.isoformat(), "timeZone": str(TZ)}
+            changes.append(f"time → **{start:%a %b %-d, %-I:%M %p} – {end:%-I:%M %p}**")
+        if self.description is not None and self.description.value.strip() != e['description']:
+            body['description'] = self.description.value.strip()
+            changes.append("description")
+        if not body:
+            await interaction.response.send_message("Nothing changed.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            await asyncio.to_thread(patch_event, os.getenv('GOOGLE_CALENDAR_ID'), self.card.gid, body)
+        except Exception as err:
+            await interaction.followup.send(f"Couldn't update Google Calendar ({err}). Nothing was changed.", ephemeral=True)
+            return
+        sync = interaction.client.get_cog("CalendarSync")
+        if sync:
+            sync.sync_soon(5)
+        print(f"Edited event {e['name']} ({self.card.gid}) by {interaction.user} ({interaction.user.id}): {list(body)}")
+        lines = ["Updated " + ", ".join(changes) + ". Discord follows within a few minutes."]
+        snap = await self.card.cog.cache.get(fresh=True)
+        if 'start' in body:
+            room = room_state(e, snap.store.get(self.card.gid, {}))[1]
+            room_of = lambda other: room_state(other, snap.store.get(other['id'], {}))[1]
+            others = [o for o in snap.events if o['id'] != self.card.gid]
+            for other, same_room in new_event.overlaps(others, start, end, room, room_of):
+                lines.append(f"⚠️ {'Same room' if same_room else 'Same time'} as **{other['name']}** "
+                             f"({render.fmt_day(other['start'])}, {other['location'] or 'TBA'}).")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+        await self.card.redraw()
+
+
+class DeleteConfirm(discord.ui.View):
+    def __init__(self, card, event):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.card, self.event = card, event
+
+    @discord.ui.button(label="Delete", style=discord.ButtonStyle.danger)
+    async def delete(self, interaction, button):
+        if self.is_finished():
+            await interaction.response.send_message("Already handled.", ephemeral=True)
+            return
+        self.stop()
+        e = self.event
+        try:
+            await asyncio.to_thread(delete_calendar_event, os.getenv('GOOGLE_CALENDAR_ID'), self.card.gid)
+        except Exception as err:
+            await interaction.response.edit_message(content=f"Couldn't delete it from Google Calendar ({err}). Nothing was deleted.",
+                                                    view=None)
+            return
+        sync = interaction.client.get_cog("CalendarSync")
+        if sync:
+            sync.sync_soon(5)
+        snap = self.card.cog.cache.with_store()
+        if snap is not None:
+            snap.events = [x for x in snap.events if x['id'] != self.card.gid]
+        print(f"Deleted event {e['name']} ({self.card.gid}) by {interaction.user} ({interaction.user.id})")
+        await interaction.response.edit_message(
+            content=f"Deleted **{e['name']}** from Google Calendar; the Discord event goes within a few minutes. "
+                    "To undo, restore it from the calendar's trash.", view=None)
+        if self.card.message:
+            try:
+                await self.card.message.edit(content=f"~~{e['name']}~~ was deleted.", embed=None, view=None)
+            except discord.HTTPException:
+                pass
+
+    @discord.ui.button(label="Keep it", style=discord.ButtonStyle.secondary)
+    async def keep(self, interaction, button):
+        self.stop()
+        await interaction.response.edit_message(content="Kept; nothing was deleted.", view=None)
 
 class OwnerPicker(discord.ui.View):
     def __init__(self, card):
