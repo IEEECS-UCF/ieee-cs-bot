@@ -8,7 +8,7 @@ from discord.ext import commands, tasks
 
 from bot.cogs import volunteer
 from bot.utils.alerts import alert
-from bot.officer import render, members, metrics
+from bot.officer import render, members, metrics, tabling
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
 from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TABLING_SHEET_ID
 from bot.officer.steps import event_steps, problems, owner_of
@@ -30,6 +30,7 @@ DIGEST_HOUR = 10
 NUDGE_HOUR = 11
 NUDGE_REPEAT_DAYS = 7
 REPORT_HOUR = 10
+TABLING_REMINDER_HOUR = int(os.getenv('TABLING_REMINDER_HOUR', '12'))  # the day before a session
 TABLING_TASK_DAYS = 14
 
 
@@ -70,6 +71,7 @@ class Officer(commands.Cog):
         self.digest_channel_id = int(os.getenv('OFFICER_DIGEST_CHANNEL_ID') or 0) or None
         self.nudge_channel_id = int(os.getenv('NUDGE_CHANNEL_ID') or 0) or None
         self.metrics_channel_id = int(os.getenv('METRICS_CHANNEL_ID') or 0) or None
+        self.tabling_channel_id = int(os.getenv('TABLING_REMINDER_CHANNEL_ID') or 0) or None
 
     async def cog_load(self):
         sync = self.bot.get_cog("CalendarSync")
@@ -89,12 +91,17 @@ class Officer(commands.Cog):
             self.monthly_metrics.start()
         else:
             print("Monthly report disabled: METRICS_CHANNEL_ID not set.")
+        if self.tabling_channel_id and TABLING_SHEET_ID:
+            self.tabling_reminders.start()
+        else:
+            print("Tabling reminders disabled: TABLING_REMINDER_CHANNEL_ID or TABLING_SHEET_ID not set.")
 
     def cog_unload(self):
         self.warm.cancel()
         self.officer_digest.cancel()
         self.daily_nudges.cancel()
         self.monthly_metrics.cancel()
+        self.tabling_reminders.cancel()
         self.bot.remove_dynamic_items(OpenEventButton)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -182,29 +189,45 @@ class Officer(commands.Cog):
     async def post_tabling_tasks(self, user_id):
         if self.volunteer_channel() is None or not TABLING_SHEET_ID:
             return "Needs VOLUNTEER_CHANNEL_ID and TABLING_SHEET_ID set."
-        async with aiohttp.ClientSession() as session:
-            rows = await fetch_tabling(session)
         existing = {t.get("key") for t in volunteer.load_tasks().values()}
         today = datetime.datetime.now(TZ).date()
         posted = []
-        for r in rows:
-            try:
-                day = datetime.date.fromisoformat(r.get('Date', '').strip())
-            except ValueError:
-                continue
-            filled = [r.get(k, '').strip() for k in ('Volunteer 1', 'Volunteer 2') if r.get(k, '').strip()]
-            key = f"tabling|{day.isoformat()}|{r.get('Time', '').strip()}"
-            if not 0 <= (day - today).days <= TABLING_TASK_DAYS or len(filled) >= 2 or key in existing:
+        for x in await self.tabling_sessions():
+            key = f"tabling|{x['key']}"   # board_signups finds the task by this key
+            filled = x["names"]
+            if not 0 <= (x["date"] - today).days <= TABLING_TASK_DAYS or len(filled) >= 2 or key in existing:
                 continue
             task = volunteer.new_task(
-                f"Table: {r.get('Event Name', '').strip()} ({day:%a %b %-d})",
-                f"{r.get('Time', '').strip()} · {r.get('Location', '').strip()}",
-                (r.get('Notes', '').strip() + ("\nAlready signed up on the sheet: " + ", ".join(filled) if filled else "")).strip()
+                f"Table: {x['event']} ({x['date']:%a %b %-d})", f"{x['time']} · {x['location']}",
+                (x["notes"] + ("\nAlready signed up on the sheet: " + ", ".join(filled) if filled else "")).strip()
                 + "\nAlso add your name to the Tabling Signup sheet.",
                 2 - len(filled), user_id, key=key)
             message = await self.post_task(task)
             posted.append(f"{task['title']}: {message.jump_url}")
         return posted
+
+    async def tabling_sessions(self):
+        async with aiohttp.ClientSession() as session:
+            return tabling.sessions(await fetch_tabling(session))
+
+    def guild_members(self):
+        guild = self.bot.get_guild(int(os.getenv('GUILD_ID')))
+        return guild.members if guild else []
+
+    def board_signups(self, session):
+        """(user IDs who claimed this session on the volunteer board, link to its open task or None)."""
+        guild_id = os.getenv('GUILD_ID')
+        claimed, link = [], None
+        for task in volunteer.load_tasks().values():
+            if task.get("key") == f"tabling|{session['key']}":
+                claimed += [u for u in task["claimed"] if u not in claimed]
+                if task["open"] and task.get("message_id"):
+                    link = f"https://discord.com/channels/{guild_id}/{task['channel_id']}/{task['message_id']}"
+        return claimed, link
+
+    def tabling_reminder(self, session):
+        claimed, link = self.board_signups(session)
+        return tabling.reminder(session, self.guild_members(), claimed, link)
 
     async def close_task(self, task_id):
         tasks_ = volunteer.load_tasks()
@@ -303,6 +326,36 @@ class Officer(commands.Cog):
             state["posted"] = key
             save_json(metrics.METRICS_FILE, state)
         print(f"Posted the monthly report for {key}")
+
+    @tasks.loop(minutes=30)
+    async def tabling_reminders(self):
+        try:
+            await self.send_tabling_reminders_if_due()
+        except Exception as e:
+            await alert(self.bot, "Tabling reminders", e)
+
+    @tabling_reminders.before_loop
+    async def before_tabling(self):
+        await self.bot.wait_until_ready()
+
+    async def send_tabling_reminders_if_due(self):
+        now = datetime.datetime.now(TZ)
+        sent = tabling.load_state()["sent"]
+        if now.hour < TABLING_REMINDER_HOUR:
+            return
+        due = tabling.due(await self.tabling_sessions(), sent, now, TABLING_REMINDER_HOUR)
+        if not due:
+            return
+        channel = self.bot.get_channel(self.tabling_channel_id)
+        if channel is None:
+            print("Error: Could not find the tabling reminder channel.")
+            return
+        for session in due:
+            text, pings = self.tabling_reminder(session)
+            await channel.send(text, allowed_mentions=discord.AllowedMentions(
+                everyone=False, roles=False, users=[discord.Object(u) for u in pings]))
+            tabling.mark_sent(session["key"], now.date())
+            print(f"Tabling reminder posted for {session['event']} on {session['date']}")
 
     @tasks.loop(minutes=30)
     async def daily_nudges(self):

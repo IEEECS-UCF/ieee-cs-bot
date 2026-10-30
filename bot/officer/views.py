@@ -17,7 +17,7 @@ from bot.cogs import volunteer, event_reminders
 from bot.officer.data import EventStore, SKIPPED, add_deadline, remove_deadline, load_deadlines, deadline_key
 from bot.officer.sources import TZ, fetch_repos, fetch_tabling, to_event, TABLING_SHEET_ID, WINDOW_AHEAD_DAYS
 from bot.officer.steps import event_steps, owner_of, booked_room, clashes, PROBLEMS
-from bot.officer import render, new_event
+from bot.officer import render, new_event, tabling
 
 # The interactive parts of the officer tools. Every view here is ephemeral
 # (only the officer who opened it sees it) except OpenEventButton, which sits
@@ -25,6 +25,7 @@ from bot.officer import render, new_event
 
 OFFICER_ROLE_IDS = {int(r) for r in os.getenv('OFFICER_ROLE_IDS', '1449921163248533525,1424610929424994477').split(',') if r.strip()}
 VIEW_TIMEOUT = 840  # Discord lets the bot edit an ephemeral message for 15 minutes
+TABLING_HOUR_LABEL = datetime.time(int(os.getenv('TABLING_REMINDER_HOUR', '12'))).strftime('%-I %p')
 store = EventStore()
 
 ACTIONS = [
@@ -849,9 +850,97 @@ class ChapterView(discord.ui.View):
             return
         await interaction.response.send_message("Which task?", view=CloseTask(self, tasks), ephemeral=True)
 
+    @discord.ui.button(label="Tabling names", style=discord.ButtonStyle.secondary, row=2)
+    async def tabling_names(self, interaction, button):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        view = TablingNames(self.cog)
+        await view.load()
+        view.message = await interaction.followup.send(embed=view.embed(), view=view, ephemeral=True, wait=True)
+
     @discord.ui.button(label="Monthly report", style=discord.ButtonStyle.success, row=1)
     async def monthly_report(self, interaction, button):
         await interaction.response.send_message("Which month?", view=MonthPicker(self.cog), ephemeral=True)
+
+class TablingNames(discord.ui.View):
+    """Who each name on the Tabling Signup sheet is in Discord, for the day-before reminders."""
+    DAYS = 60
+
+    def __init__(self, cog):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.cog, self.message, self.sessions, self.names = cog, None, [], []
+
+    async def load(self):
+        today = datetime.datetime.now(TZ).date()
+        self.sessions = [x for x in await self.cog.tabling_sessions()
+                         if 0 <= (x["date"] - today).days <= self.DAYS]
+        self.names = list(dict.fromkeys(n for x in self.sessions for n in x["names"]))
+        for item in [i for i in self.children if isinstance(i, discord.ui.Select)]:
+            self.remove_item(item)
+        if self.names:
+            menu = discord.ui.Select(placeholder="Fix a name…", options=[
+                discord.SelectOption(label=n[:100], value=n[:100]) for n in self.names[:25]])
+            menu.callback = self.pick
+            self.add_item(menu)
+
+    def embed(self):
+        members, people = self.cog.guild_members(), tabling.load_people()
+        lines = []
+        for name in self.names:
+            user_id, by_hand = tabling.resolve(name, members, people)
+            who = f"<@{user_id}>" if user_id else ("not in Discord" if by_hand else "**no match**")
+            lines.append(f"**{name}** → {who}" + (" (set by hand)" if by_hand else " (matched automatically)" if user_id else ""))
+        if not lines:
+            lines = [f"Nobody is signed up on the sheet in the next {self.DAYS} days."]
+        lines += ["", f"Reminders post the day before at {TABLING_HOUR_LABEL}, pinging these people and anyone "
+                      "who claimed the session on the volunteer board."]
+        return create_base_embed(title="🪧 Tabling names", description="\n".join(lines), color=IEEE_BLUE)
+
+    async def redraw(self):
+        if self.message:
+            try:
+                await self.message.edit(embed=self.embed(), view=self)
+            except discord.HTTPException as e:
+                print(f"Could not redraw tabling names: {e}")
+
+    async def pick(self, interaction):
+        name = interaction.data["values"][0]
+        await interaction.response.send_message(f"Who is **{name}** on the sheet?", view=PersonPicker(self, name),
+                                                ephemeral=True)
+
+    @discord.ui.button(label="Preview next reminder", style=discord.ButtonStyle.primary)
+    async def preview(self, interaction, button):
+        tomorrow = datetime.datetime.now(TZ).date() + datetime.timedelta(days=1)
+        upcoming = sorted((x for x in self.sessions if x["date"] >= tomorrow), key=lambda x: x["date"])
+        if not upcoming:
+            await interaction.response.send_message("No upcoming sessions on the sheet.", ephemeral=True)
+            return
+        text, _ = self.cog.tabling_reminder(upcoming[0])
+        await interaction.response.send_message(
+            f"Posts {upcoming[0]['date'] - datetime.timedelta(days=1):%a %b %-d} at {TABLING_HOUR_LABEL}:\n\n{text}",
+            ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+class PersonPicker(discord.ui.View):
+    def __init__(self, names_view, name):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.names_view, self.name = names_view, name
+
+    async def save(self, interaction, user_id, note):
+        tabling.set_person(self.name, user_id)
+        print(f"Tabling name {self.name!r} set to {user_id} by {interaction.user} ({interaction.user.id})")
+        await interaction.response.edit_message(content=f"**{self.name}**: {note}.", view=None)
+        await self.names_view.redraw()
+
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick their Discord account")
+    async def person(self, interaction, select):
+        await self.save(interaction, select.values[0].id, f"<@{select.values[0].id}>")
+
+    @discord.ui.button(label="Not in Discord", style=discord.ButtonStyle.secondary)
+    async def nobody(self, interaction, button):
+        await self.save(interaction, tabling.NOT_IN_DISCORD, "not in Discord, so no ping")
+
+    @discord.ui.button(label="Match automatically", style=discord.ButtonStyle.secondary)
+    async def auto(self, interaction, button):
+        await self.save(interaction, None, "back to matching automatically")
 
 class MonthPicker(discord.ui.View):
     """This month so far and the five before it."""
