@@ -161,8 +161,6 @@ def report_embeds(summary, previous=None):
                         f"{s['discord_members']} members now")
     overview.append(f"**{s['verified_new']}** IEEE memberships verified this month · {s['verified_year']} verified for {year}"
                     + (f" · {s['pending']} waiting" if s['pending'] else ""))
-    if s["verified_from_role"]:
-        overview.append(f"({s['verified_from_role']} more recorded from people who already had Dues Paying)")
     embeds = [build_embed(f"📊 {title}", overview, IEEE_GOLD)]
 
     lines = []
