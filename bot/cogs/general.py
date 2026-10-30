@@ -16,7 +16,9 @@ class General(commands.Cog):
             color=IEEE_BLUE
         )
         embed.add_field(name="Website", value="[csucf](https://csucf.org)", inline=False)
-        embed.add_field(name="Instagram", value="[@ieeecsucf](https://instagram.com)", inline=False)
+        embed.add_field(name="Instagram", value="[@ieeecsucf](https://www.instagram.com/ieeecsucf/)", inline=False)
+        embed.add_field(name="LinkedIn", value="[IEEE Computer Society at UCF](https://www.linkedin.com/company/ieee-computer-society-at-ucf)", inline=False)
+        embed.add_field(name="GitHub", value="[IEEECS-UCF](https://github.com/IEEECS-UCF)", inline=False)
         embed.add_field(name="Knight Connect", value="[IEEE CS](https://knightconnect.campuslabs.com/engage/organization/ieee-cs)", inline=False)
         
         await interaction.response.send_message(embed=embed)
