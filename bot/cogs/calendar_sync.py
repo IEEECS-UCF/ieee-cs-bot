@@ -3,7 +3,6 @@ import re
 import json
 import asyncio
 import datetime
-import traceback
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -14,6 +13,7 @@ from bs4 import BeautifulSoup
 from bot.utils.gcal_client import (fetch_upcoming_events, get_event, insert_event, patch_event,
                                    delete_event as delete_gcal_event)
 from bot.utils.formatting import create_base_embed, format_timestamp, IEEE_GOLD
+from bot.utils.alerts import alert, Streak
 
 ORG_NAME = "IEEE CS"
 STATE_FILE = "data/state.json"
@@ -138,6 +138,7 @@ class CalendarSync(commands.Cog):
         self._lock = asyncio.Lock()
         self._soon = None  # pending sync after a Discord-side change
         self.can_write = False
+        self._fetch_failures = Streak()  # Google or Discord hiccups: alert if they persist
 
         os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
         self.state = self.load_state()
@@ -179,9 +180,8 @@ class CalendarSync(commands.Cog):
         async with self._lock:
             try:
                 await self.run_sync()
-            except Exception:
-                print("Calendar sync failed:")
-                traceback.print_exc()
+            except Exception as e:
+                await alert(self.bot, "Calendar sync", e)
 
     @sync_events.before_loop
     async def before_sync(self):
@@ -208,9 +208,8 @@ class CalendarSync(commands.Cog):
             async with self._lock:
                 try:
                     await self.run_sync()
-                except Exception:
-                    print("Calendar sync failed:")
-                    traceback.print_exc()
+                except Exception as e:
+                    await alert(self.bot, "Calendar sync", e)
         self._soon = asyncio.create_task(later())
 
     async def run_sync(self):
@@ -226,6 +225,8 @@ class CalendarSync(commands.Cog):
             )
         except Exception as e:
             print(f"Failed to fetch calendar events: {e}")
+            if self._fetch_failures.failed():
+                await alert(self.bot, "Calendar sync", e, detail=f"can't read Google Calendar 3 times in a row: {e}")
             return
         can_write = access_role in ('writer', 'owner')
         if can_write != self.can_write:
@@ -237,7 +238,10 @@ class CalendarSync(commands.Cog):
             discord_events = {e.id: e for e in await guild.fetch_scheduled_events()}
         except discord.HTTPException as e:
             print(f"Failed to fetch Discord events: {e}")
+            if self._fetch_failures.failed():
+                await alert(self.bot, "Calendar sync", e, detail=f"can't read Discord events 3 times in a row: {e}")
             return
+        self._fetch_failures.ok()
 
         items, payloads = {}, []
         for item in gcal_events:

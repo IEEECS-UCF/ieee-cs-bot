@@ -1,11 +1,12 @@
 import os
 import json
 import datetime
-import traceback
 from zoneinfo import ZoneInfo
 
 import discord
 from discord.ext import commands, tasks
+
+from bot.utils.alerts import alert
 
 STATE_FILE = "data/reminders.json"
 OVERRIDES_FILE = "data/reminder_overrides.json"  # Discord event ID -> {"send": ..., "ping": ...}
@@ -168,9 +169,8 @@ class EventReminders(commands.Cog):
         # A raised exception would stop tasks.loop for good, so catch everything
         try:
             await self.run_reminders()
-        except Exception:
-            print("Event reminders failed:")
-            traceback.print_exc()
+        except Exception as e:
+            await alert(self.bot, "Event reminders", e)
 
     @send_reminders.before_loop
     async def before_reminders(self):

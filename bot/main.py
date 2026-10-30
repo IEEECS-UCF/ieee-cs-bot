@@ -5,6 +5,8 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 
+from bot.utils.alerts import alert
+
 load_dotenv()
 
 class IEEECSBot(commands.Bot):
@@ -44,7 +46,7 @@ class IEEECSBot(commands.Bot):
         if isinstance(error, discord.app_commands.CheckFailure):
             return  # the check already told the user why
         name = interaction.command.qualified_name if interaction.command else "?"
-        logging.getLogger("bot").error("Command /%s failed", name, exc_info=error)
+        await alert(self, f"Command /{name}", getattr(error, 'original', error))
         message = "Something went wrong running that command. It has been logged."
         try:
             if interaction.response.is_done():

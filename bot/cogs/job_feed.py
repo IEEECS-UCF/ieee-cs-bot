@@ -4,7 +4,6 @@ import json
 import time
 import asyncio
 import datetime
-import traceback
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 
 import discord
@@ -14,6 +13,7 @@ from bot.utils.job_listings import (
 )
 from bot.utils.job_worker import classify_location, US_CANADA_COUNTRIES
 from bot.utils.formatting import create_base_embed, IEEE_BLUE
+from bot.utils.alerts import alert
 
 ORG_NAME = "IEEE CS"
 STATE_FILE = "data/jobs_state.json"
@@ -352,9 +352,8 @@ class JobFeed(commands.Cog):
         async with self._lock:
             try:
                 await self.run_check()
-            except Exception:
-                print("Job feed check failed:")
-                traceback.print_exc()
+            except Exception as e:
+                await alert(self.bot, "Job feed", e)
 
     @check_jobs.before_loop
     async def before_check(self):

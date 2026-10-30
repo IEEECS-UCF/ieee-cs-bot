@@ -6,7 +6,6 @@ import json
 import asyncio
 import datetime
 import difflib
-import traceback
 from zoneinfo import ZoneInfo
 
 import aiohttp
@@ -15,7 +14,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from dateutil import parser
 
-from bot.utils.gcal_client import get_calendar_service
+from bot.utils.gcal_client import get_calendar_service, patch_event
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.utils.vtools_client import fetch_branch_events, fetch_event, parse_event_id
 from bot.utils import checkin_client
@@ -24,6 +23,7 @@ from bot.utils import event_text
 from bot.utils.event_text import place, same_place
 from bot.cogs.calendar_sync import calendar_flyer
 from bot.cogs import volunteer
+from bot.utils.alerts import alert
 
 TZ = ZoneInfo(os.getenv('REMINDER_TZ', 'America/New_York'))
 BRANCH_SPOID = os.getenv('VTOOLS_SPOID', 'SBC13081')
@@ -34,6 +34,7 @@ CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
 WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked or linked
 DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
 OWNERS_FILE = "data/owners.json"      # calendar event ID -> Discord user ID of its owner
+ROOMS_FILE = "data/rooms.json"        # calendar event ID -> {"status", "room", "since", "by", "note"}
 # Default owner by kind of event ("workshops:<id>,other:<id>"); /officer owner overrides it
 DEFAULT_OWNERS = dict(pair.split(":", 1) for pair in os.getenv('DEFAULT_OWNERS', '').split(",") if ":" in pair)
 NUDGES_FILE = "data/nudges.json"      # {"sent": {"<event>|<item>": date}, "threads": {event: thread ID}}
@@ -47,6 +48,8 @@ NOT_SLIDE_REPOS = {'website', 'ieeecs-ucf.github.io', 'ieee-cs-bot'}
 VTOOLS_LOOKBACK_DAYS = 90
 EVENTS_LOOKAHEAD_DAYS = 45
 ROOM_WARNING_DAYS = 21     # flag events this close with no room
+ROOM_REQUEST_DAYS = 28     # nudge for a room request this far out (Student Union needs 2+ weeks)
+ROOM_PENDING_DAYS = 7      # nudge to follow up on a request this old with no answer
 TABLING_LOOKAHEAD_DAYS = 60
 DEADLINE_LOOKAHEAD_DAYS = 90
 # Days the officer digest posts (DIGEST_DAYS, e.g. "sun,wed"), at DIGEST_HOUR local time
@@ -172,31 +175,75 @@ def owner_of(event, owners):
     default = DEFAULT_OWNERS.get(event_text.kind(event) or 'other')
     return (int(default), False) if default else (None, False)
 
+def room_state(event, rooms):
+    """(status, room) for an event: 'none', 'requested', 'confirmed' or 'denied'.
+
+    A room typed straight into the calendar counts as confirmed, and so does a
+    request whose room has since shown up there.
+    """
+    record = rooms.get(event['id'])
+    has_room = not no_room(event['location'])
+    if record:
+        if record['status'] == 'requested' and has_room and same_place(record['room'], event['location']):
+            return 'confirmed', event['location']
+        return record['status'], record.get('room') or event['location']
+    return ('confirmed', event['location']) if has_room else ('none', None)
+
+def room_label(status, room, record=None):
+    if status == 'none':
+        return "no room"
+    if status == 'requested':
+        since = f" since {datetime.date.fromisoformat(record['since']):%b %-d}" if record else ""
+        return f"{room} requested{since}"
+    if status == 'denied':
+        return f"{room} denied"
+    return room
+
+def room_clashes(event, others, rooms):
+    """Other events at overlapping times in the same (requested or confirmed) room."""
+    status, room = room_state(event, rooms)
+    if status not in ('requested', 'confirmed') or not room:
+        return []
+    clashes = []
+    for other in others:
+        if other is event or not (event['start'] < other['end'] and other['start'] < event['end']):
+            continue
+        other_status, other_room = room_state(other, rooms)
+        if other_status in ('requested', 'confirmed') and other_room and same_place(room, other_room):
+            clashes.append(other)
+    return clashes
+
 def check_events(events):
     now = datetime.datetime.now(TZ)
     owners = load_json(OWNERS_FILE, {})
+    rooms = load_json(ROOMS_FILE, {})
     upcoming = [e for e in events if e['start'] > now]
     lines = []
     for e in upcoming:
         days = (e['start'].date() - now.date()).days
         issues = []
-        if no_room(e['location']):
+        status, room = room_state(e, rooms)
+        if status == 'none':
             issues.append("**no room**" if days <= ROOM_WARNING_DAYS else "no room yet")
+        elif status == 'denied':
+            issues.append("**room denied**")
         if not e['description']:
             issues.append("no description")
+        clashing = room_clashes(e, upcoming, rooms)
+        for other in clashing:
+            issues.append(f"**same room as {other['name']}**")
         for other in upcoming:
-            if other is e or not (e['start'] < other['end'] and other['start'] < e['end']):
+            if other is e or other in clashing or not (e['start'] < other['end'] and other['start'] < e['end']):
                 continue
-            same_room = e['location'] and e['location'].casefold() == other['location'].casefold()
-            issues.append(f"**{'same room as' if same_room else 'overlaps'} {other['name']}**")
+            issues.append(f"overlaps {other['name']}")
         due = []
         for what, lead in (("signage/IG", 14), ("announce", 7)):
             when = e['start'].date() - datetime.timedelta(days=lead)
             due.append(f"{what} {'was due' if when < now.date() else 'by'} {when:%b %-d}")
-        status = "; ".join(issues) or "ok"
         who, by_hand = owner_of(e, owners)
         owner = (f" · owner <@{who}>" + ("" if by_hand else " (default)")) if who else " · **no owner**"
-        lines.append(f"`{fmt_day(e['start'])}` **{e['name']}** ({e['location'] or 'TBA'}){owner}: {status}"
+        where = room_label(status, room, rooms.get(e['id']))
+        lines.append(f"`{fmt_day(e['start'])}` **{e['name']}** ({where}){owner}: {'; '.join(issues) or 'ok'}"
                      + (f"\n  ↳ {', '.join(due)}" if due else ""))
     return lines or ["No upcoming events in the calendar."]
 
@@ -506,6 +553,7 @@ async def open_items(events):
     """{event ID: [what's still open, with the command that fixes it]} for active events."""
     now = datetime.datetime.now(TZ)
     checkins = load_checkins()
+    rooms = load_json(ROOMS_FILE, {})
     crosscheck, _ = await crosscheck_rows(events)
     listing = {e['id']: (kc_state, vt_state) for e, kc_state, _, vt_state, _ in crosscheck}
     wrapups = {e['id']: items for e, items in await wrapup_rows(events)}
@@ -516,8 +564,16 @@ async def open_items(events):
         items = []
         days = (e['start'].date() - now.date()).days
         if e['start'] > now:
-            if no_room(e['location']) and days <= ROOM_WARNING_DAYS:
-                items.append(("room", "no room booked yet"))
+            room_status, room = room_state(e, rooms)
+            record = rooms.get(e['id'])
+            if room_status == 'none' and days <= ROOM_REQUEST_DAYS:
+                items.append(("room", "no room requested yet: request one from the Student Union, then `/officer room`"))
+            elif room_status == 'requested' and record and \
+                    (now.date() - datetime.date.fromisoformat(record['since'])).days >= ROOM_PENDING_DAYS:
+                items.append(("room-pending", f"room request for {room} has had no answer since "
+                                              f"{datetime.date.fromisoformat(record['since']):%b %-d}: follow up with the Student Union"))
+            elif room_status == 'denied':
+                items.append(("room-denied", f"{room} was denied: request another room, then `/officer room`"))
             kc_state, vt_state = listing.get(e['id'], (None, None))
             if kc_state == TODO:
                 items.append(("knightconnect", "not on KnightConnect: `/officer listings copy`"))
@@ -1172,6 +1228,54 @@ class OfficerTools(commands.Cog):
         view = DraftView(draft, int(channel_id)) if channel_id else None
         await interaction.followup.send(text[:2000], view=view, ephemeral=True)
 
+    # ---------- rooms ----------
+
+    @officer.command(name="room", description="Record an event's room request: requested, confirmed or denied.")
+    @app_commands.describe(event="The calendar event", status="Where the request stands",
+                           room="The room, e.g. ENG2 205", note="Anything to remember (who you asked, ticket #)")
+    @app_commands.choices(status=[app_commands.Choice(name="Requested", value="requested"),
+                                  app_commands.Choice(name="Confirmed", value="confirmed"),
+                                  app_commands.Choice(name="Denied", value="denied"),
+                                  app_commands.Choice(name="Clear (forget the request)", value="clear")])
+    @app_commands.autocomplete(event=window_autocomplete)
+    async def room_cmd(self, interaction: discord.Interaction, event: str, status: app_commands.Choice[str],
+                       room: str = None, note: str = None):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        events = await self.window_events()
+        match = next((e for e in events if e['id'] == event), None)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        rooms = load_json(ROOMS_FILE, {})
+        room = " ".join((room or "").split())
+        if status.value == "clear":
+            rooms.pop(event, None)
+            save_json(ROOMS_FILE, rooms)
+            await interaction.followup.send(f"**{match['name']}**: room request cleared.", ephemeral=True)
+            return
+        if not room and status.value != "denied" and no_room(match['location']):
+            await interaction.followup.send("Which room? Add `room`, e.g. ENG2 205.", ephemeral=True)
+            return
+        room = room or match['location']
+        previous = rooms.get(event, {})
+        same = previous.get('status') == status.value and previous.get('room') and same_place(previous['room'], room)
+        rooms[event] = {'status': status.value, 'room': room,
+                        'since': previous['since'] if same else datetime.datetime.now(TZ).date().isoformat(),
+                        'by': interaction.user.id, 'note': note or previous.get('note', '')}
+        save_json(ROOMS_FILE, rooms)
+        lines = [f"**{match['name']}** ({fmt_day(match['start'])}): {room_label(status.value, room, rooms[event])}"]
+
+        if status.value == "confirmed" and not same_place(room, match['location'] or ''):
+            try:
+                await asyncio.to_thread(patch_event, os.getenv('GOOGLE_CALENDAR_ID'), event, {'location': room})
+                match = dict(match, location=room)
+                lines.append("Updated the calendar's location; Discord follows within a few minutes.")
+            except Exception as e:
+                lines.append(f"Couldn't update the calendar's location ({e}); change it there by hand.")
+        for other in room_clashes(match, [match if e['id'] == event else e for e in events], rooms):
+            lines.append(f"⚠️ Same room at an overlapping time as **{other['name']}** ({fmt_day(other['start'])}).")
+        await interaction.followup.send("\n".join(lines), ephemeral=True)
+
     # ---------- owners and nudges ----------
 
     @officer.command(name="owner", description="Set who owns an event (they get its nudges). Leave user empty to clear.")
@@ -1220,9 +1324,8 @@ class OfficerTools(commands.Cog):
         # A raised exception would stop tasks.loop for good, so catch everything
         try:
             await self.send_nudges_if_due()
-        except Exception:
-            print("Event nudges failed:")
-            traceback.print_exc()
+        except Exception as e:
+            await alert(self.bot, "Event nudges", e)
 
     @daily_nudges.before_loop
     async def before_nudges(self):
@@ -1383,9 +1486,8 @@ class OfficerTools(commands.Cog):
         # A raised exception would stop tasks.loop for good, so catch everything
         try:
             await self.post_digest_if_due()
-        except Exception:
-            print("Officer digest failed:")
-            traceback.print_exc()
+        except Exception as e:
+            await alert(self.bot, "Officer digest", e)
 
     @officer_digest.before_loop
     async def before_digest(self):
