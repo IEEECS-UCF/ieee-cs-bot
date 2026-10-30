@@ -13,7 +13,9 @@ class IEEECSBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
-        intents.guild_scheduled_events = True  
+        intents.guild_scheduled_events = True
+        # Privileged: also switch on "Server Members Intent" in the Developer Portal first
+        intents.members = os.getenv('MEMBERS_INTENT') == '1'  
         
         super().__init__(
             command_prefix=commands.when_mentioned_or('!'),

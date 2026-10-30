@@ -8,7 +8,8 @@ from bot.officer.data import load_json, save_json
 #
 #   {"<user id>": {"number": "09994411", "email": "", "status": "pending|verified|rejected",
 #                  "year": 2026, "submitted": "YYYY-MM-DD", "reviewed_by": <id>, "reason": "",
-#                  "card": {"channel": <id>, "message": <id>}}}
+#                  "card": {"channel": <id>, "message": <id>}, "source": "role"}}
+# "source": "role" marks people recorded because they already had the Dues Paying role.
 MEMBERS_FILE = "data/members.json"
 VALIDATOR = "https://services20.ieee.org/membership-validator.html"
 
@@ -44,6 +45,22 @@ def decide(user_id, status, officer_id, reason="", today=None):
         return None
     today = today or datetime.date.today()
     record.update(status=status, reviewed_by=officer_id, reason=reason or "", year=today.year)
+    save_record(user_id, record)
+    return record
+
+def recognize(user_id, today=None):
+    """Record someone who already has the Dues Paying role as verified this year.
+
+    Covers people given the role before /member verify existed, or by hand.
+    Returns the new record, or None if they were already verified this year.
+    """
+    today = today or datetime.date.today()
+    record = get(user_id)
+    if record and record["status"] == "verified" and record["year"] == today.year:
+        return None
+    record = {"number": (record or {}).get("number"), "email": (record or {}).get("email", ""),
+              "status": "verified", "source": "role", "year": today.year, "submitted": today.isoformat(),
+              "reviewed_by": None, "reason": "", "card": (record or {}).get("card")}
     save_record(user_id, record)
     return record
 

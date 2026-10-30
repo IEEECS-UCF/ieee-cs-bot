@@ -13,9 +13,15 @@ from bot.utils.alerts import alert
 # /member verify and /member status, for anyone in the server. Each request
 # posts a review card in MEMBER_REVIEW_CHANNEL_ID; an officer checks the number
 # in IEEE's validator and presses Approve (gives DUES_PAYING_ROLE_ID) or Reject.
+# Anyone who already has the role counts as verified: they're recorded when they
+# use a /member command, and, if the Server Members intent is on (MEMBERS_INTENT=1),
+# at startup and whenever the role is added by hand.
 
 DUES_PAYING_ROLE_ID = int(os.getenv('DUES_PAYING_ROLE_ID', '1428785815789768704'))
 
+
+def has_role(user):
+    return any(role.id == DUES_PAYING_ROLE_ID for role in getattr(user, 'roles', []))
 
 def review_embed(user_id, record):
     status = {"pending": "⏳ Waiting for an officer",
@@ -139,12 +145,31 @@ class Members(commands.Cog):
     def cog_unload(self):
         self.bot.remove_dynamic_items(ReviewButton)
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Record everyone who already has the role (needs the Server Members intent)."""
+        if not self.bot.intents.members:
+            return
+        added = 0
+        for guild in self.bot.guilds:
+            role = guild.get_role(DUES_PAYING_ROLE_ID)
+            for member in role.members if role else []:
+                added += members.recognize(member.id) is not None
+        print(f"Membership: {added} Dues Paying member(s) newly recorded as verified.")
+
+    @commands.Cog.listener()
+    async def on_member_update(self, before, after):
+        if has_role(after) and not has_role(before) and members.recognize(after.id):
+            print(f"Membership: {after} ({after.id}) got Dues Paying by hand; recorded as verified.")
+
     def review_channel(self):
         channel_id = os.getenv('MEMBER_REVIEW_CHANNEL_ID')
         return self.bot.get_channel(int(channel_id)) if channel_id else None
 
     @member.command(name="verify", description="Get the Dues Paying role by verifying your IEEE membership.")
     async def verify(self, interaction: discord.Interaction):
+        if has_role(interaction.user):
+            members.recognize(interaction.user.id)
         record = members.get(interaction.user.id)
         year = datetime.date.today().year
         if record and record["status"] == "pending":
@@ -157,6 +182,8 @@ class Members(commands.Cog):
 
     @member.command(name="status", description="Where your IEEE membership check stands.")
     async def status(self, interaction: discord.Interaction):
+        if has_role(interaction.user):
+            members.recognize(interaction.user.id)
         record = members.get(interaction.user.id)
         if record is None:
             text = "You haven't asked yet. Use `/member verify`."

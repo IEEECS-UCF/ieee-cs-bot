@@ -101,3 +101,35 @@ async def test_member_commands_are_open_to_everyone():
     cmds = sorted(c.qualified_name for c in bot.tree.walk_commands() if isinstance(c, discord.app_commands.Command))
     assert cmds == ["member status", "member verify"]
     assert members_cog.Members.member.default_permissions is None
+
+
+# ---------- people who already have the role ----------
+
+def test_role_holders_are_recognized_once():
+    assert members.recognize(20, today=DAY)["source"] == "role"
+    assert members.recognize(20, today=DAY) is None
+    assert members.counts(DAY)[0] == 1
+    members.submit(21, "00000005", "", today=DAY)
+    record = members.recognize(21, today=DAY)                    # a pending request is settled by the role
+    assert record["status"] == "verified" and record["number"] == "00000005"
+    assert members.recognize(20, today=datetime.date(2027, 1, 3))["year"] == 2027
+
+
+async def test_status_recognizes_existing_role_holders():
+    cog = members_cog.Members(commands.Bot(command_prefix="!", intents=discord.Intents.none()))
+    interaction = interaction_with([members_cog.DUES_PAYING_ROLE_ID])
+    interaction.user.id = 30
+    await members_cog.Members.status.callback(cog, interaction)
+    assert interaction.response.sent.startswith("✅ Verified") and members.get(30)["source"] == "role"
+    interaction = interaction_with([members_cog.DUES_PAYING_ROLE_ID])
+    interaction.user.id = 31
+    await members_cog.Members.verify.callback(cog, interaction)
+    assert "already verified" in interaction.response.sent and interaction.response.modal is None
+
+async def test_role_added_by_hand_is_recorded():
+    cog = members_cog.Members(commands.Bot(command_prefix="!", intents=discord.Intents.none()))
+    role = types.SimpleNamespace(id=members_cog.DUES_PAYING_ROLE_ID)
+    before = types.SimpleNamespace(id=40, roles=[])
+    after = types.SimpleNamespace(id=40, roles=[role])
+    await cog.on_member_update(before, after)
+    assert members.get(40)["status"] == "verified"
