@@ -20,6 +20,10 @@ from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.utils.vtools_client import fetch_branch_events, fetch_event, parse_event_id
 from bot.utils import checkin_client
 from bot.utils import knightconnect_client as kc
+from bot.utils import event_text
+from bot.utils.event_text import place, same_place
+from bot.cogs.calendar_sync import calendar_flyer
+from bot.cogs import volunteer
 
 TZ = ZoneInfo(os.getenv('REMINDER_TZ', 'America/New_York'))
 BRANCH_SPOID = os.getenv('VTOOLS_SPOID', 'SBC13081')
@@ -29,6 +33,8 @@ DIGEST_STATE_FILE = "data/digest.json"
 CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
 WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked or linked
 DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
+OWNERS_FILE = "data/owners.json"      # calendar event ID -> Discord user ID of its owner
+NUDGES_FILE = "data/nudges.json"      # {"sent": {"<event>|<item>": date}, "threads": {event: thread ID}}
 GITHUB_ORG = os.getenv('GITHUB_ORG', 'IEEECS-UCF')
 KNIGHTCONNECT_ORG_ID = os.getenv('KNIGHTCONNECT_ORG_ID', '430881')
 # Only these roles may use /officer, whatever Discord's command permissions say
@@ -50,6 +56,9 @@ SLIDES_WINDOW_DAYS = 10       # a repo created this soon after an event may hold
 CROSSCHECK_BACK_DAYS = 14     # listings compared against the calendar
 CROSSCHECK_AHEAD_DAYS = 45
 LISTING_DUE_DAYS = 21         # flag a missing listing once the event is this close
+NUDGE_HOUR = 11               # local time, after the reminders and the digest
+NUDGE_REPEAT_DAYS = 7         # mention an unresolved item again after this long
+CHECKIN_DUE_DAYS = 2          # nudge for a check-in form this close to the event
 
 EMBED_LIMIT = 4000
 
@@ -83,6 +92,7 @@ def fetch_calendar(days_back, days_ahead):
             'name': " ".join((item.get('summary') or 'Untitled').split()),
             'location': " ".join((item.get('location') or '').split()),
             'description': (item.get('description') or '').strip(),
+            'flyer': calendar_flyer(item),
         })
     return events
 
@@ -151,6 +161,7 @@ def no_room(location):
 
 def check_events(events):
     now = datetime.datetime.now(TZ)
+    owners = load_json(OWNERS_FILE, {})
     upcoming = [e for e in events if e['start'] > now]
     lines = []
     for e in upcoming:
@@ -170,7 +181,8 @@ def check_events(events):
             when = e['start'].date() - datetime.timedelta(days=lead)
             due.append(f"{what} {'was due' if when < now.date() else 'by'} {when:%b %-d}")
         status = "; ".join(issues) or "ok"
-        lines.append(f"`{fmt_day(e['start'])}` **{e['name']}** ({e['location'] or 'TBA'}): {status}"
+        owner = f" · owner <@{owners[e['id']]}>" if e['id'] in owners else " · **no owner**"
+        lines.append(f"`{fmt_day(e['start'])}` **{e['name']}** ({e['location'] or 'TBA'}){owner}: {status}"
                      + (f"\n  ↳ {', '.join(due)}" if due else ""))
     return lines or ["No upcoming events in the calendar."]
 
@@ -285,36 +297,6 @@ def check_deadlines():
 DONE, TODO, SKIP, LATER = "✅", "⬜", "➖", "⏳"
 
 # ---------- listings check: KnightConnect and vTools vs. the calendar ----------
-
-# Spellings of the same building, so "ENGII 102" and "Engineering 2 Room 102" match
-BUILDINGS = [
-    (r'L3HARRIS|\bHEC\b', 'HEC'),
-    (r'\bENGINEERING\s*(II|2)\b|\bENG\s*(II|2)\b|\bEGN\s*2\b', 'ENG2'),
-    (r'\bENGINEERING\s*(I|1)\b|\bENG\s*(I|1)\b|\bEGN\s*1\b', 'ENG1'),
-    (r'\bHEALTH\s*SCIENCES?\s*(I|1)\b|\bHS\s*1\b|\bHSB\b', 'HS1'),
-    (r'\bHEALTH\s*SCIENCES?\s*(II|2)\b|\bHS\s*2\b', 'HS2'),
-    (r'\bBUSINESS\s*ADMIN\w*\s*(I|1)\b|\bBA\s*1\b', 'BA1'),
-    (r'\bCLASSROOM\s*BUILDING\s*(I|1)\b|\bCB\s*1\b', 'CB1'),
-    (r'\bCLASSROOM\s*BUILDING\s*(II|2)\b|\bCB\s*2\b', 'CB2'),
-    (r'\bTEACHING\s*ACADEMY\b|\bTA\b', 'TA'),
-    (r'\bTECHNOLOGY\s*COMMONS\b|\bTCH\b', 'TCH'),
-    (r'\bSTUDENT\s*UNION\b', 'SU'),
-]
-
-def place(location):
-    """(building code or None, room number or None) from a free-text location."""
-    text = (location or '').upper()
-    building = next((code for pattern, code in BUILDINGS if re.search(pattern, text)), None)
-    room = re.search(r'(?<![A-Z0-9])(\d{2,4})[A-Z]{0,2}(?![0-9])', re.sub(r'ENG\s*[12]|EGN\s*[12]|HS\s*[12]|BA\s*[12]|CB\s*[12]', ' ', text))
-    return building, room.group(1) if room else None
-
-def same_place(a, b):
-    (building_a, room_a), (building_b, room_b) = place(a), place(b)
-    if room_a and room_b and room_a != room_b:
-        return False
-    if building_a and building_b and building_a != building_b:
-        return False
-    return True
 
 def vtools_location(record):
     return " ".join(str(record.get(k) or '') for k in ('building', 'room-number', 'address1')).strip()
@@ -504,6 +486,75 @@ def format_wrapups(rows, open_only=False):
     return lines
 
 
+# ---------- nudges ----------
+
+async def open_items(events):
+    """{event ID: [what's still open, with the command that fixes it]} for active events."""
+    now = datetime.datetime.now(TZ)
+    checkins = load_checkins()
+    crosscheck, _ = await crosscheck_rows(events)
+    listing = {e['id']: (kc_state, vt_state) for e, kc_state, _, vt_state, _ in crosscheck}
+    wrapups = {e['id']: items for e, items in await wrapup_rows(events)}
+    found = {}
+    for e in events:
+        if 'tabling' in e['name'].casefold():
+            continue
+        items = []
+        days = (e['start'].date() - now.date()).days
+        if e['start'] > now:
+            if no_room(e['location']) and days <= ROOM_WARNING_DAYS:
+                items.append(("room", "no room booked yet"))
+            kc_state, vt_state = listing.get(e['id'], (None, None))
+            if kc_state == TODO:
+                items.append(("knightconnect", "not on KnightConnect: `/officer listings copy`"))
+            if vt_state == TODO:
+                items.append(("vtools", "not in vTools: `/officer listings copy`"))
+            if e['id'] not in checkins and days <= CHECKIN_DUE_DAYS:
+                items.append(("checkin", "no check-in form: `/officer checkin create`"))
+        elif e['end'] <= now - datetime.timedelta(days=1):
+            for item, state, _ in wrapups.get(e['id'], []):
+                if state == TODO:
+                    fix = {"vTools": "file the attendance report in vTools",
+                           "slides": "post slides to GitHub, or `/officer wrapup slides`",
+                           "recap": "post a recap, then `/officer wrapup mark`"}.get(item, item)
+                    items.append((f"wrapup-{item}", fix))
+        if items:
+            found[e['id']] = items
+    return found
+
+def due_nudges(items_by_event, sent, today):
+    """Only items not mentioned in the last NUDGE_REPEAT_DAYS."""
+    due = {}
+    for gid, items in items_by_event.items():
+        fresh = [(key, text) for key, text in items
+                 if f"{gid}|{key}" not in sent
+                 or (today - datetime.date.fromisoformat(sent[f"{gid}|{key}"])).days >= NUDGE_REPEAT_DAYS]
+        if fresh:
+            due[gid] = fresh
+    return due
+
+
+MESSAGE_EMBED_CHARS = 5800  # Discord allows 6000 across all embeds in one message
+MESSAGE_EMBEDS = 10
+
+def embed_size(embed):
+    return len(embed.title or "") + len(embed.description or "") + len(embed.footer.text or "")
+
+def split_embeds(embeds):
+    """Group embeds into messages that stay under Discord's per-message limits."""
+    batches, current, size = [], [], 0
+    for embed in embeds:
+        n = embed_size(embed)
+        if current and (size + n > MESSAGE_EMBED_CHARS or len(current) == MESSAGE_EMBEDS):
+            batches.append(current)
+            current, size = [], 0
+        current.append(embed)
+        size += n
+    if current:
+        batches.append(current)
+    return batches
+
+
 def build_embed(title, lines, color=IEEE_BLUE, footer=None):
     text = ""
     for line in lines:
@@ -515,6 +566,54 @@ def build_embed(title, lines, color=IEEE_BLUE, footer=None):
     if footer:
         embed.set_footer(text=footer)
     return embed
+
+
+def mentions_in(text):
+    """Allow exactly the mentions written into an approved post, nothing else."""
+    roles = [discord.Object(int(r)) for r in re.findall(r'<@&(\d+)>', text)]
+    return discord.AllowedMentions(everyone='@everyone' in text, users=False, roles=roles or False)
+
+class DraftEdit(discord.ui.Modal, title="Edit the announcement"):
+    def __init__(self, view):
+        super().__init__(timeout=900)
+        self.view = view
+        self.body = discord.ui.TextInput(label="Announcement", style=discord.TextStyle.paragraph,
+                                         default=view.draft[:2000], max_length=2000)
+        self.add_item(self.body)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        url = await self.view.post_once(interaction, self.body.value)
+        await interaction.response.send_message(url or "Already posted from this draft.", ephemeral=True)
+
+class DraftView(discord.ui.View):
+    """Buttons under a draft (only the officer who asked sees them). Posts at most once."""
+    def __init__(self, draft, channel_id):
+        super().__init__(timeout=900)
+        self.draft, self.channel_id, self.posted = draft, channel_id, False
+
+    async def post_once(self, interaction, text):
+        if self.posted:
+            return None
+        channel = interaction.client.get_channel(self.channel_id)
+        if channel is None:
+            return "Couldn't find the announcements channel."
+        self.posted = True
+        self.stop()
+        message = await channel.send(text, allowed_mentions=mentions_in(text))
+        print(f"Announcement posted by {interaction.user} ({interaction.user.id})")
+        return f"Posted: {message.jump_url}"
+
+    @discord.ui.button(label="Post as is", style=discord.ButtonStyle.primary)
+    async def post(self, interaction: discord.Interaction, button: discord.ui.Button):
+        result = await self.post_once(interaction, self.draft)
+        await interaction.response.edit_message(content=result or "Already posted from this draft.", view=None)
+
+    @discord.ui.button(label="Edit and post", style=discord.ButtonStyle.secondary)
+    async def edit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.posted:
+            await interaction.response.send_message("Already posted from this draft.", ephemeral=True)
+            return
+        await interaction.response.send_modal(DraftEdit(self))
 
 
 class OfficerTools(commands.Cog):
@@ -543,6 +642,9 @@ class OfficerTools(commands.Cog):
     listings = app_commands.Group(
         name="listings", description="KnightConnect and vTools listings vs. the calendar.", parent=officer,
     )
+    task = app_commands.Group(
+        name="task", description="Volunteer board: tasks members can claim.", parent=officer,
+    )
 
     def __init__(self, bot):
         self.bot = bot
@@ -555,9 +657,16 @@ class OfficerTools(commands.Cog):
             self.weekly_digest.start()
         else:
             print("Officer digest disabled: OFFICER_DIGEST_CHANNEL_ID not set.")
+        nudge_channel = os.getenv('NUDGE_CHANNEL_ID')
+        self.nudge_channel_id = int(nudge_channel) if nudge_channel else None
+        if self.nudge_channel_id:
+            self.daily_nudges.start()
+        else:
+            print("Event nudges disabled: NUDGE_CHANNEL_ID not set.")
 
     def cog_unload(self):
         self.weekly_digest.cancel()
+        self.daily_nudges.cancel()
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Every /officer command: Officer or Exec role required."""
@@ -955,6 +1064,28 @@ class OfficerTools(commands.Cog):
             options.insert(0, app_commands.Choice(name=f"Listing {parse_event_id(current)}", value=current[:100]))
         return options
 
+    @listings.command(name="copy", description="Fields for an event, laid out for KnightConnect's or vTools' create form.")
+    @app_commands.describe(platform="Which site's form", event="The calendar event")
+    @app_commands.choices(platform=[app_commands.Choice(name="KnightConnect", value="knightconnect"),
+                                    app_commands.Choice(name="vTools", value="vtools")])
+    @app_commands.autocomplete(event=window_autocomplete)
+    async def listings_copy(self, interaction: discord.Interaction, platform: app_commands.Choice[str], event: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        match = next((e for e in await self.window_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        embed = create_base_embed(title=f"📋 {platform.name}: {match['name']}",
+                                  description=event_text.copy_block(match, platform.value), color=IEEE_BLUE)
+        files = []
+        sync = self.bot.get_cog("CalendarSync")
+        if platform.value == "knightconnect" and match.get('flyer') and sync:
+            image = await sync.download_flyer(match['flyer'])
+            if image:
+                files.append(discord.File(io.BytesIO(image), filename="flyer.png"))
+                embed.set_image(url="attachment://flyer.png")
+        await interaction.followup.send(embed=embed, files=files, ephemeral=True)
+
     @listings.command(name="link", description="Point an event at its KnightConnect or vTools listing, or mark it not needed.")
     @app_commands.describe(platform="Which site", event="The calendar event",
                            listing="Listing ID or link, auto, or not needed")
@@ -992,6 +1123,236 @@ class OfficerTools(commands.Cog):
             note = f"Linked to **{title}** <{record['link']}>."
         save_wrapups(marks)
         await interaction.followup.send(f"**{match['name']}** ({fmt_day(match['start'])}), {platform.name}: {note}", ephemeral=True)
+
+    # ---------- announcement drafts ----------
+
+    def discord_link(self, gid):
+        sync = self.bot.get_cog("CalendarSync")
+        did = sync.state["event_map"].get(gid) if sync else None
+        return f"https://discord.com/events/{os.getenv('GUILD_ID')}/{did}" if did else ""
+
+    @officer.command(name="draft", description="Draft the #announcements post and Instagram caption for an event.")
+    @app_commands.describe(event="The calendar event")
+    @app_commands.autocomplete(event=window_autocomplete)
+    async def draft_cmd(self, interaction: discord.Interaction, event: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        match = next((e for e in await self.window_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        role_key = event_text.kind(match)
+        role_id = os.getenv({'workshops': 'REMINDER_ROLE_WORKSHOPS', 'socials': 'REMINDER_ROLE_SOCIALS',
+                             'prodev': 'REMINDER_ROLE_PRODEV'}.get(role_key, ''), '')
+        draft = event_text.announcement_draft(match, self.discord_link(match['id']),
+                                              f"<@&{role_id}>" if role_id else None)
+        caption = event_text.instagram_caption(match)
+        text = (f"**#announcements draft** (edit before posting; mentions only ping when posted)\n```md\n{draft}\n```"
+                f"\n**Instagram caption**\n```\n{caption}\n```")
+        channel_id = os.getenv('ANNOUNCE_CHANNEL_ID') or os.getenv('REMINDER_CHANNEL_ID')
+        view = DraftView(draft, int(channel_id)) if channel_id else None
+        await interaction.followup.send(text[:2000], view=view, ephemeral=True)
+
+    # ---------- owners and nudges ----------
+
+    @officer.command(name="owner", description="Set who owns an event (they get its nudges). Leave user empty to clear.")
+    @app_commands.describe(event="The calendar event", user="The officer responsible")
+    @app_commands.autocomplete(event=window_autocomplete)
+    async def owner_cmd(self, interaction: discord.Interaction, event: str, user: discord.Member = None):
+        match = next((e for e in await self.window_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.response.send_message("Pick an event from the list.", ephemeral=True)
+            return
+        owners = load_json(OWNERS_FILE, {})
+        if user is None:
+            owners.pop(event, None)
+            note = "Owner cleared."
+        else:
+            owners[event] = user.id
+            note = f"Owner: {user.mention}"
+        save_json(OWNERS_FILE, owners)
+        await interaction.response.send_message(f"**{match['name']}** ({fmt_day(match['start'])}): {note}",
+                                                ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    async def nudge_events(self):
+        return await self.calendar(WRAPUP_LOOKBACK_DAYS, CROSSCHECK_AHEAD_DAYS)
+
+    @officer.command(name="nudges", description="Preview the nudges event owners would get today.")
+    async def nudges_cmd(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        events = await self.nudge_events()
+        by_id = {e['id']: e for e in events}
+        owners = load_json(OWNERS_FILE, {})
+        state = load_json(NUDGES_FILE, {"sent": {}, "threads": {}})
+        due = due_nudges(await open_items(events), state["sent"], datetime.datetime.now(TZ).date())
+        lines = []
+        for gid, items in sorted(due.items(), key=lambda kv: by_id[kv[0]]['start']):
+            e = by_id[gid]
+            who = f"<@{owners[gid]}>" if gid in owners else "**no owner** (`/officer owner`)"
+            lines.append(f"`{fmt_day(e['start'])}` **{e['name']}** → {who}\n" + "\n".join(f"  • {t}" for _, t in items))
+        status = "on" if self.nudge_channel_id else "off (NUDGE_CHANNEL_ID not set)"
+        await interaction.followup.send(embed=build_embed(
+            "📌 Nudges due today", lines or ["Nothing due."], footer=f"Daily nudges are {status}."), ephemeral=True)
+
+    @tasks.loop(minutes=30)
+    async def daily_nudges(self):
+        # A raised exception would stop tasks.loop for good, so catch everything
+        try:
+            await self.send_nudges_if_due()
+        except Exception:
+            print("Event nudges failed:")
+            traceback.print_exc()
+
+    @daily_nudges.before_loop
+    async def before_nudges(self):
+        await self.bot.wait_until_ready()
+
+    async def send_nudges_if_due(self, force=False):
+        now = datetime.datetime.now(TZ)
+        state = load_json(NUDGES_FILE, {"sent": {}, "threads": {}, "day": None})
+        if not force and (now.hour < NUDGE_HOUR or state.get("day") == now.date().isoformat()):
+            return
+        channel = self.bot.get_channel(self.nudge_channel_id)
+        if channel is None:
+            print("Error: Could not find the nudge channel.")
+            return
+        events = await self.nudge_events()
+        by_id = {e['id']: e for e in events}
+        owners = load_json(OWNERS_FILE, {})
+        due = due_nudges(await open_items(events), state["sent"], now.date())
+        for gid, items in due.items():
+            e = by_id[gid]
+            owner = owners.get(gid)
+            text = ((f"<@{owner}> " if owner else "No owner yet (`/officer owner`). ")
+                    + f"Still open for **{e['name']}** ({fmt_day(e['start'])}):\n"
+                    + "\n".join(f"• {t}" for _, t in items))
+            allowed = discord.AllowedMentions(everyone=False, roles=False,
+                                              users=[discord.Object(int(owner))] if owner else False)
+            thread = await self.event_thread(channel, e, state)
+            await thread.send(text, allowed_mentions=allowed)
+            for key, _ in items:
+                state["sent"][f"{gid}|{key}"] = now.date().isoformat()
+            save_json(NUDGES_FILE, state)
+            print(f"Nudged {e['name']}: {', '.join(k for k, _ in items)}")
+        state["day"] = now.date().isoformat()
+        save_json(NUDGES_FILE, state)
+
+    async def event_thread(self, channel, event, state):
+        """The event's own thread in the nudge channel, created on first use."""
+        thread_id = state["threads"].get(event['id'])
+        if thread_id:
+            thread = self.bot.get_channel(int(thread_id))
+            if thread is None:
+                try:
+                    thread = await self.bot.fetch_channel(int(thread_id))
+                except discord.HTTPException:
+                    thread = None
+            if thread is not None:
+                if getattr(thread, 'archived', False):
+                    await thread.edit(archived=False)
+                return thread
+        name = f"{event['name']} ({fmt_day(event['start'])})"[:100]
+        if isinstance(channel, discord.ForumChannel):
+            created = await channel.create_thread(name=name, content=f"Tracking **{event['name']}**: open items get posted here.")
+            thread = created.thread
+        else:
+            starter = await channel.send(f"📌 **{event['name']}** ({fmt_day(event['start'])}): open items go in this thread.")
+            thread = await starter.create_thread(name=name)
+        state["threads"][event['id']] = thread.id
+        save_json(NUDGES_FILE, state)
+        return thread
+
+    # ---------- volunteer board ----------
+
+    def volunteer_channel(self):
+        channel_id = os.getenv('VOLUNTEER_CHANNEL_ID')
+        return self.bot.get_channel(int(channel_id)) if channel_id else None
+
+    async def post_task(self, task):
+        channel = self.volunteer_channel()
+        message = await channel.send(embed=volunteer.task_embed(task), view=volunteer.task_view(task),
+                                     allowed_mentions=discord.AllowedMentions.none())
+        task["channel_id"], task["message_id"] = channel.id, message.id
+        return message
+
+    @task.command(name="add", description="Post a task members can claim.")
+    @app_commands.describe(title="What needs doing", when="When (free text)", details="Anything else", spots="How many people")
+    async def task_add(self, interaction: discord.Interaction, title: str, when: str = None,
+                       details: str = None, spots: app_commands.Range[int, 1, 20] = 1):
+        if self.volunteer_channel() is None:
+            await interaction.response.send_message("The volunteer board is off (VOLUNTEER_CHANNEL_ID not set).", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        tasks = volunteer.load_tasks()
+        task = volunteer.new_task(title, when, details, spots, interaction.user.id)
+        message = await self.post_task(task)
+        tasks[task["id"]] = task
+        volunteer.save_tasks(tasks)
+        await interaction.followup.send(f"Posted: {message.jump_url}", ephemeral=True)
+
+    @task.command(name="tabling", description="Post claimable tasks for understaffed tabling sessions in the next two weeks.")
+    async def task_tabling(self, interaction: discord.Interaction):
+        if self.volunteer_channel() is None or not TABLING_SHEET_ID:
+            await interaction.response.send_message("Needs VOLUNTEER_CHANNEL_ID and TABLING_SHEET_ID set.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with aiohttp.ClientSession() as session:
+            rows = await fetch_tabling(session)
+        tasks = volunteer.load_tasks()
+        existing = {t.get("key") for t in tasks.values()}
+        today = datetime.datetime.now(TZ).date()
+        posted = []
+        for r in rows:
+            try:
+                day = datetime.date.fromisoformat(r.get('Date', '').strip())
+            except ValueError:
+                continue
+            filled = [r.get(k, '').strip() for k in ('Volunteer 1', 'Volunteer 2') if r.get(k, '').strip()]
+            key = f"tabling|{day.isoformat()}|{r.get('Time', '').strip()}"
+            if not 0 <= (day - today).days <= 14 or len(filled) >= 2 or key in existing:
+                continue
+            task = volunteer.new_task(
+                f"Table: {r.get('Event Name', '').strip()} ({day:%a %b %-d})",
+                f"{r.get('Time', '').strip()} · {r.get('Location', '').strip()}",
+                (r.get('Notes', '').strip() + ("\nAlready signed up on the sheet: " + ", ".join(filled) if filled else "")).strip()
+                + "\nAlso add your name to the Tabling Signup sheet.",
+                2 - len(filled), interaction.user.id, key=key)
+            message = await self.post_task(task)
+            tasks[task["id"]] = task
+            posted.append(f"{task['title']}: {message.jump_url}")
+        volunteer.save_tasks(tasks)
+        await interaction.followup.send("\n".join(posted) or "Every session in the next two weeks is staffed or already posted.",
+                                        ephemeral=True)
+
+    async def open_task_autocomplete(self, interaction: discord.Interaction, current: str):
+        return [app_commands.Choice(name=t["title"][:100], value=t["id"])
+                for t in volunteer.load_tasks().values() if t["open"] and current.casefold() in t["title"].casefold()][:25]
+
+    @task.command(name="list", description="Open tasks and who claimed them.")
+    async def task_list(self, interaction: discord.Interaction):
+        lines = [f"**{t['title']}** ({len(t['claimed'])}/{t['slots']}): "
+                 + (", ".join(f"<@{u}>" for u in t["claimed"]) or "nobody yet")
+                 for t in volunteer.load_tasks().values() if t["open"]]
+        await interaction.response.send_message(embed=build_embed("🙋 Open tasks", lines or ["No open tasks."]), ephemeral=True)
+
+    @task.command(name="close", description="Close a task (its buttons go away).")
+    @app_commands.describe(task="The task")
+    @app_commands.autocomplete(task=open_task_autocomplete)
+    async def task_close(self, interaction: discord.Interaction, task: str):
+        tasks = volunteer.load_tasks()
+        found = tasks.get(task)
+        if found is None:
+            await interaction.response.send_message("Pick a task from the list.", ephemeral=True)
+            return
+        found["open"] = False
+        volunteer.save_tasks(tasks)
+        channel = self.bot.get_channel(found["channel_id"]) if found["channel_id"] else None
+        if channel:
+            try:
+                message = await channel.fetch_message(found["message_id"])
+                await message.edit(embed=volunteer.task_embed(found), view=None)
+            except discord.HTTPException as e:
+                print(f"Could not update closed task message: {e}")
+        await interaction.response.send_message(f"Closed **{found['title']}**.", ephemeral=True)
 
     # ---------- Monday digest (off unless configured) ----------
 
@@ -1032,8 +1393,10 @@ class OfficerTools(commands.Cog):
         ]
         role = os.getenv('OFFICER_DIGEST_ROLE_ID')
         content = f"<@&{role}> **Weekly officer digest**" if role else "**Weekly officer digest**"
-        await channel.send(content=content, embeds=embeds, allowed_mentions=discord.AllowedMentions(
-            everyone=False, users=False, roles=[discord.Object(int(role))] if role else False))
+        for i, batch in enumerate(split_embeds(embeds)):
+            # Only the first message pings
+            await channel.send(content=content if i == 0 else None, embeds=batch, allowed_mentions=discord.AllowedMentions(
+                everyone=False, users=False, roles=[discord.Object(int(role))] if role and i == 0 else False))
         tmp = DIGEST_STATE_FILE + ".tmp"
         with open(tmp, "w") as f:
             json.dump({'week': week}, f)
