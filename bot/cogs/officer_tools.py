@@ -34,6 +34,8 @@ CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
 WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked or linked
 DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
 OWNERS_FILE = "data/owners.json"      # calendar event ID -> Discord user ID of its owner
+# Default owner by kind of event, e.g. "workshops:<user id>"; /officer owner overrides it
+DEFAULT_OWNERS = dict(pair.split(":", 1) for pair in os.getenv('DEFAULT_OWNERS', '').split(",") if ":" in pair)
 NUDGES_FILE = "data/nudges.json"      # {"sent": {"<event>|<item>": date}, "threads": {event: thread ID}}
 GITHUB_ORG = os.getenv('GITHUB_ORG', 'IEEECS-UCF')
 KNIGHTCONNECT_ORG_ID = os.getenv('KNIGHTCONNECT_ORG_ID', '430881')
@@ -159,6 +161,13 @@ def fmt_day(dt):
 def no_room(location):
     return location.casefold() in ('', 'tba', 'tbd')
 
+def owner_of(event, owners):
+    """(user ID or None, set by hand?) for an event."""
+    if event['id'] in owners:
+        return owners[event['id']], True
+    default = DEFAULT_OWNERS.get(event_text.kind(event) or '')
+    return (int(default), False) if default else (None, False)
+
 def check_events(events):
     now = datetime.datetime.now(TZ)
     owners = load_json(OWNERS_FILE, {})
@@ -181,7 +190,8 @@ def check_events(events):
             when = e['start'].date() - datetime.timedelta(days=lead)
             due.append(f"{what} {'was due' if when < now.date() else 'by'} {when:%b %-d}")
         status = "; ".join(issues) or "ok"
-        owner = f" · owner <@{owners[e['id']]}>" if e['id'] in owners else " · **no owner**"
+        who, by_hand = owner_of(e, owners)
+        owner = (f" · owner <@{who}>" + ("" if by_hand else " (default)")) if who else " · **no owner**"
         lines.append(f"`{fmt_day(e['start'])}` **{e['name']}** ({e['location'] or 'TBA'}){owner}: {status}"
                      + (f"\n  ↳ {', '.join(due)}" if due else ""))
     return lines or ["No upcoming events in the calendar."]
@@ -1165,7 +1175,8 @@ class OfficerTools(commands.Cog):
         owners = load_json(OWNERS_FILE, {})
         if user is None:
             owners.pop(event, None)
-            note = "Owner cleared."
+            default, _ = owner_of(match, owners)
+            note = f"Owner cleared; back to the default (<@{default}>)." if default else "Owner cleared."
         else:
             owners[event] = user.id
             note = f"Owner: {user.mention}"
@@ -1187,7 +1198,8 @@ class OfficerTools(commands.Cog):
         lines = []
         for gid, items in sorted(due.items(), key=lambda kv: by_id[kv[0]]['start']):
             e = by_id[gid]
-            who = f"<@{owners[gid]}>" if gid in owners else "**no owner** (`/officer owner`)"
+            owner_id, _ = owner_of(e, owners)
+            who = f"<@{owner_id}>" if owner_id else "**no owner** (`/officer owner`)"
             lines.append(f"`{fmt_day(e['start'])}` **{e['name']}** → {who}\n" + "\n".join(f"  • {t}" for _, t in items))
         status = "on" if self.nudge_channel_id else "off (NUDGE_CHANNEL_ID not set)"
         await interaction.followup.send(embed=build_embed(
@@ -1221,7 +1233,7 @@ class OfficerTools(commands.Cog):
         due = due_nudges(await open_items(events), state["sent"], now.date())
         for gid, items in due.items():
             e = by_id[gid]
-            owner = owners.get(gid)
+            owner, _ = owner_of(e, owners)
             text = ((f"<@{owner}> " if owner else "No owner yet (`/officer owner`). ")
                     + f"Still open for **{e['name']}** ({fmt_day(e['start'])}):\n"
                     + "\n".join(f"• {t}" for _, t in items))

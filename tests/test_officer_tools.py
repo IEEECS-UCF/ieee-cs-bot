@@ -129,3 +129,13 @@ def test_posted_announcement_allows_only_written_mentions():
     allowed = ot.mentions_in("# Hey <@&111>! ...")
     assert allowed.everyone is False and [r.id for r in allowed.roles] == [111]
     assert ot.mentions_in("# Hey @everyone!").everyone is True
+
+
+# ---------- default owners ----------
+
+def test_workshops_default_to_workshop_chair(monkeypatch):
+    monkeypatch.setattr(ot, "DEFAULT_OWNERS", {"workshops": "711695730594676849"})
+    workshop, gbm = make_event(name="Intro to gem5", gid="w"), make_event(name="Fall GBM #3", gid="g")
+    assert ot.owner_of(workshop, {}) == (711695730594676849, False)
+    assert ot.owner_of(gbm, {}) == (None, False)
+    assert ot.owner_of(workshop, {"w": 42}) == (42, True)   # set by hand wins
