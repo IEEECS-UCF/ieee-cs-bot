@@ -132,11 +132,22 @@ def task_lines(tasks):
              for t in tasks.values() if t["open"]]
     return lines or ["No open volunteer tasks."]
 
-def chapter_embeds(tabling_rows, tasks, today):
-    return [build_embed("⏰ Deadlines", deadline_lines(today), IEEE_GOLD),
-            build_embed("🪧 Tabling", tabling_lines(tabling_rows, today) if tabling_rows is not None
-                        else ["Tabling sheet not configured or unreadable."]),
-            build_embed("🙋 Volunteer tasks", task_lines(tasks))]
+def member_lines(verified, pending, guild_id, year):
+    lines = [f"**{verified}** verified for {year} · **{len(pending)}** waiting for review"]
+    for uid, record in sorted(pending, key=lambda p: p[1]["submitted"]):
+        card = record.get("card")
+        link = f" · [review](https://discord.com/channels/{guild_id}/{card['channel']}/{card['message']})" if card else ""
+        lines.append(f"⬜ <@{uid}> `{record['number']}` since {record['submitted']}{link}")
+    return lines
+
+def chapter_embeds(tabling_rows, tasks, today, membership=None, guild_id=None):
+    embeds = [build_embed("⏰ Deadlines", deadline_lines(today), IEEE_GOLD),
+              build_embed("🪧 Tabling", tabling_lines(tabling_rows, today) if tabling_rows is not None
+                          else ["Tabling sheet not configured or unreadable."]),
+              build_embed("🙋 Volunteer tasks", task_lines(tasks))]
+    if membership is not None:
+        embeds.append(build_embed("🪪 IEEE members", member_lines(*membership, guild_id, today.year)))
+    return embeds
 
 
 # ---------- nudges ----------

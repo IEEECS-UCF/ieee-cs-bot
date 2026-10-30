@@ -9,7 +9,7 @@ from discord.ext import commands, tasks
 from bot.cogs import volunteer
 from bot.utils.alerts import alert
 from bot.utils.event_text import same_place
-from bot.officer import render
+from bot.officer import render, members
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
 from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TABLING_SHEET_ID
 from bot.officer.steps import event_steps, problems, owner_of, room_state
@@ -149,7 +149,9 @@ class Officer(commands.Cog):
                     rows = await fetch_tabling(session)
             except Exception as e:
                 print(f"Tabling sheet unreadable: {e}")
-        return render.chapter_embeds(rows, volunteer.load_tasks(), datetime.datetime.now(TZ).date())
+        today = datetime.datetime.now(TZ).date()
+        return render.chapter_embeds(rows, volunteer.load_tasks(), today, members.counts(today),
+                                     os.getenv('GUILD_ID'))
 
     def volunteer_channel(self):
         channel_id = os.getenv('VOLUNTEER_CHANNEL_ID')
