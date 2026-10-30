@@ -1,5 +1,6 @@
 import os
 import io
+import re
 import csv
 import json
 import asyncio
@@ -18,6 +19,7 @@ from bot.utils.gcal_client import get_calendar_service
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.utils.vtools_client import fetch_branch_events, fetch_event, parse_event_id
 from bot.utils import checkin_client
+from bot.utils import knightconnect_client as kc
 
 TZ = ZoneInfo(os.getenv('REMINDER_TZ', 'America/New_York'))
 BRANCH_SPOID = os.getenv('VTOOLS_SPOID', 'SBC13081')
@@ -28,6 +30,7 @@ CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
 WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked or linked
 DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
 GITHUB_ORG = os.getenv('GITHUB_ORG', 'IEEECS-UCF')
+KNIGHTCONNECT_ORG_ID = os.getenv('KNIGHTCONNECT_ORG_ID', '430881')
 # Only these roles may use /officer, whatever Discord's command permissions say
 # (Officer, Exec). Discord's own setting (Manage Events) is a second layer.
 OFFICER_ROLE_IDS = {int(r) for r in os.getenv('OFFICER_ROLE_IDS', '1449921163248533525,1424610929424994477').split(',') if r.strip()}
@@ -44,6 +47,9 @@ CHECKIN_PICK_BACK_DAYS = 2    # events offered by /officer checkin create
 CHECKIN_PICK_AHEAD_DAYS = 30
 WRAPUP_LOOKBACK_DAYS = 21     # events still shown in the wrap-up checklist
 SLIDES_WINDOW_DAYS = 10       # a repo created this soon after an event may hold its slides
+CROSSCHECK_BACK_DAYS = 14     # listings compared against the calendar
+CROSSCHECK_AHEAD_DAYS = 45
+LISTING_DUE_DAYS = 21         # flag a missing listing once the event is this close
 
 EMBED_LIMIT = 4000
 
@@ -231,14 +237,14 @@ async def check_vtools(events):
             lines.append(f"✅ {label}: {ieee + guests} ({ieee} IEEE, {guests} guests){linked}")
     return lines or [f"No calendar events in the last {VTOOLS_LOOKBACK_DAYS} days."]
 
-def best_match(event, candidates):
-    """The vTools event closest in name, or in start time if names differ."""
+def best_match(event, candidates, start_key='start-time', title_key='title'):
+    """The listing closest in name, or in start time if names differ."""
     best, best_score = None, 0.0
     for c in candidates:
-        start = parser.isoparse(c['start-time']).astimezone(TZ)
+        start = parser.isoparse(c[start_key]).astimezone(TZ)
         if start.date() != event['start'].date():
             continue
-        score = difflib.SequenceMatcher(None, event['name'].casefold(), c['title'].casefold()).ratio()
+        score = difflib.SequenceMatcher(None, event['name'].casefold(), c[title_key].casefold()).ratio()
         if abs((start - event['start']).total_seconds()) <= 2 * 3600:
             score += 0.5
         if score > best_score:
@@ -276,10 +282,131 @@ def check_deadlines():
     return lines or ["No deadlines in the next 90 days."]
 
 
+DONE, TODO, SKIP, LATER = "✅", "⬜", "➖", "⏳"
+
+# ---------- listings check: KnightConnect and vTools vs. the calendar ----------
+
+# Spellings of the same building, so "ENGII 102" and "Engineering 2 Room 102" match
+BUILDINGS = [
+    (r'L3HARRIS|\bHEC\b', 'HEC'),
+    (r'\bENGINEERING\s*(II|2)\b|\bENG\s*(II|2)\b|\bEGN\s*2\b', 'ENG2'),
+    (r'\bENGINEERING\s*(I|1)\b|\bENG\s*(I|1)\b|\bEGN\s*1\b', 'ENG1'),
+    (r'\bHEALTH\s*SCIENCES?\s*(I|1)\b|\bHS\s*1\b|\bHSB\b', 'HS1'),
+    (r'\bHEALTH\s*SCIENCES?\s*(II|2)\b|\bHS\s*2\b', 'HS2'),
+    (r'\bBUSINESS\s*ADMIN\w*\s*(I|1)\b|\bBA\s*1\b', 'BA1'),
+    (r'\bCLASSROOM\s*BUILDING\s*(I|1)\b|\bCB\s*1\b', 'CB1'),
+    (r'\bCLASSROOM\s*BUILDING\s*(II|2)\b|\bCB\s*2\b', 'CB2'),
+    (r'\bTEACHING\s*ACADEMY\b|\bTA\b', 'TA'),
+    (r'\bTECHNOLOGY\s*COMMONS\b|\bTCH\b', 'TCH'),
+    (r'\bSTUDENT\s*UNION\b', 'SU'),
+]
+
+def place(location):
+    """(building code or None, room number or None) from a free-text location."""
+    text = (location or '').upper()
+    building = next((code for pattern, code in BUILDINGS if re.search(pattern, text)), None)
+    room = re.search(r'(?<![A-Z0-9])(\d{2,4})[A-Z]{0,2}(?![0-9])', re.sub(r'ENG\s*[12]|EGN\s*[12]|HS\s*[12]|BA\s*[12]|CB\s*[12]', ' ', text))
+    return building, room.group(1) if room else None
+
+def same_place(a, b):
+    (building_a, room_a), (building_b, room_b) = place(a), place(b)
+    if room_a and room_b and room_a != room_b:
+        return False
+    if building_a and building_b and building_a != building_b:
+        return False
+    return True
+
+def vtools_location(record):
+    return " ".join(str(record.get(k) or '') for k in ('building', 'room-number', 'address1')).strip()
+
+def compare_listing(event, start, location, title):
+    """Differences between a calendar event and a listing, as short phrases."""
+    diffs = []
+    if abs((start - event['start']).total_seconds()) > 60:
+        diffs.append(f"time {start:%a %b %-d %-I:%M %p} vs calendar {event['start']:%-I:%M %p}")
+    if location and event['location'] and not no_room(event['location']) and not same_place(location, event['location']):
+        diffs.append(f"room **{location}** vs calendar **{event['location']}**")
+    ours, theirs = plain(event['name']), plain(title)
+    if ours not in theirs and theirs not in ours and difflib.SequenceMatcher(None, ours, theirs).ratio() < 0.4:
+        diffs.append(f"title \"{title}\"")
+    return diffs
+
+async def knightconnect_matches(events):
+    """Per calendar event ID: the KnightConnect listing, None, or SKIPPED (officer links win).
+
+    Also returns the org's listings in the same window that match no calendar event.
+    """
+    marks = load_wrapups()
+    matches = {}
+    async with aiohttp.ClientSession() as session:
+        listings = await kc.fetch_org_events(session, KNIGHTCONNECT_ORG_ID)
+        for e in events:
+            linked = marks.get(e['id'], {}).get('knightconnect')
+            if linked == SKIPPED:
+                matches[e['id']] = SKIPPED
+                continue
+            if isinstance(linked, dict):
+                record = await kc.fetch_event(session, linked['id'])
+                if record:
+                    matches[e['id']] = dict(record, linked=True)
+                    continue
+            matches[e['id']] = best_match(e, listings, start_key='startsOn', title_key='name')
+    now = datetime.datetime.now(TZ)
+    used = {m['id'] for m in matches.values() if isinstance(m, dict)}
+    orphans = [l for l in listings if l['id'] not in used
+               and now - datetime.timedelta(days=CROSSCHECK_BACK_DAYS)
+               <= parser.isoparse(l['startsOn']).astimezone(TZ)
+               <= now + datetime.timedelta(days=CROSSCHECK_AHEAD_DAYS)]
+    return matches, orphans
+
+def listing_status(event, match, start_key, title_key, location_of):
+    now = datetime.datetime.now(TZ)
+    if match == SKIPPED:
+        return SKIP, "not needed"
+    if match is None:
+        due = (event['start'] - now).days <= LISTING_DUE_DAYS
+        return (TODO if due else LATER), ("**missing**" if due else "not listed yet")
+    diffs = compare_listing(event, parser.isoparse(match[start_key]).astimezone(TZ),
+                            location_of(match), match[title_key])
+    linked = " (linked)" if match.get('linked') else ""
+    if diffs:
+        return "⚠️", "; ".join(diffs) + f" · <{match['link']}>"
+    return DONE, "matches" + linked
+
+async def crosscheck_rows(events):
+    """[(event, kc_state, kc_note, vt_state, vt_note)] for recent and upcoming events."""
+    now = datetime.datetime.now(TZ)
+    window = [e for e in events if 'tabling' not in e['name'].casefold()
+              and now - datetime.timedelta(days=CROSSCHECK_BACK_DAYS) <= e['start'] <= now + datetime.timedelta(days=CROSSCHECK_AHEAD_DAYS)]
+    kc_matches, kc_orphans = await knightconnect_matches(window)
+    vt_matches = await vtools_matches(window)
+    rows = []
+    for e in window:
+        kc_state, kc_note = listing_status(e, kc_matches[e['id']], 'startsOn', 'name', lambda m: m.get('location'))
+        vt_state, vt_note = listing_status(e, vt_matches[e['id']], 'start-time', 'title', vtools_location)
+        rows.append((e, kc_state, kc_note, vt_state, vt_note))
+    return rows, kc_orphans
+
+def format_crosscheck(result, problems_only=False):
+    rows, kc_orphans = result
+    lines = []
+    for e, kc_state, kc_note, vt_state, vt_note in rows:
+        if problems_only and kc_state in (DONE, SKIP, LATER) and vt_state in (DONE, SKIP, LATER):
+            continue
+        lines.append(f"`{fmt_day(e['start'])}` **{e['name']}**\n"
+                     f"  KnightConnect: {kc_state} {kc_note}\n  vTools: {vt_state} {vt_note}")
+    for listing in kc_orphans:
+        start = parser.isoparse(listing['startsOn']).astimezone(TZ)
+        lines.append(f"`{fmt_day(start)}` **{listing['name']}**\n  ⚠️ on KnightConnect ({listing.get('location') or 'no room'}) "
+                     f"but **not in the calendar** · <{listing['link']}>")
+    if not lines:
+        return ["Every listing matches the calendar."] if rows else ["No events in the window."]
+    return lines
+
+
 # ---------- post-event wrap-up ----------
 
 SOCIAL_WORDS = ('social', 'game night', 'picnic', 'party', 'mixer', 'bbq', 'tailgate')
-DONE, TODO, SKIP = "✅", "⬜", "➖"
 
 def plain(name):
     return " ".join(name.replace('-', ' ').replace('_', ' ').casefold().split())
@@ -412,6 +539,9 @@ class OfficerTools(commands.Cog):
     )
     deadlines = app_commands.Group(
         name="deadlines", description="Chapter deadlines shown in the digest.", parent=officer,
+    )
+    listings = app_commands.Group(
+        name="listings", description="KnightConnect and vTools listings vs. the calendar.", parent=officer,
     )
 
     def __init__(self, bot):
@@ -800,6 +930,69 @@ class OfficerTools(commands.Cog):
         save_wrapups(marks)
         await interaction.followup.send(f"**{match['name']}** ({fmt_day(match['start'])}): {note}", ephemeral=True)
 
+    # ---------- listings ----------
+
+    async def window_events(self):
+        return await self.calendar(CROSSCHECK_BACK_DAYS, CROSSCHECK_AHEAD_DAYS)
+
+    @listings.command(name="status", description="Compare KnightConnect and vTools listings with the calendar.")
+    async def listings_status(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        rows = await crosscheck_rows(await self.window_events())
+        await interaction.followup.send(embed=build_embed(
+            "🔗 Listings vs. calendar", format_crosscheck(rows),
+            footer="Fix a wrong match with /officer listings link."), ephemeral=True)
+
+    async def window_autocomplete(self, interaction: discord.Interaction, current: str):
+        events = sorted(await self.window_events(), key=lambda e: e['start'])
+        return [app_commands.Choice(name=f"{fmt_day(e['start'])} · {e['name']}"[:100], value=e['id'])
+                for e in events if current.casefold() in e['name'].casefold()][:25]
+
+    async def listing_choice_autocomplete(self, interaction: discord.Interaction, current: str):
+        options = [app_commands.Choice(name="auto (match it again)", value="auto"),
+                   app_commands.Choice(name="not needed (no listing for this event)", value=SKIPPED)]
+        if parse_event_id(current):
+            options.insert(0, app_commands.Choice(name=f"Listing {parse_event_id(current)}", value=current[:100]))
+        return options
+
+    @listings.command(name="link", description="Point an event at its KnightConnect or vTools listing, or mark it not needed.")
+    @app_commands.describe(platform="Which site", event="The calendar event",
+                           listing="Listing ID or link, auto, or not needed")
+    @app_commands.choices(platform=[app_commands.Choice(name="KnightConnect", value="knightconnect"),
+                                    app_commands.Choice(name="vTools", value="vtools")])
+    @app_commands.autocomplete(event=window_autocomplete, listing=listing_choice_autocomplete)
+    async def listings_link(self, interaction: discord.Interaction, platform: app_commands.Choice[str],
+                            event: str, listing: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        match = next((e for e in await self.window_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        marks = load_wrapups()
+        mine = marks.setdefault(event, {})
+        if listing == "auto":
+            mine.pop(platform.value, None)
+            note = "Cleared; it will be matched automatically again."
+        elif listing == SKIPPED:
+            mine[platform.value] = SKIPPED
+            note = f"Marked as not needing a {platform.name} listing."
+        else:
+            listing_id = parse_event_id(listing)
+            async with aiohttp.ClientSession() as session:
+                if platform.value == "knightconnect":
+                    record = await kc.fetch_event(session, listing_id) if listing_id else None
+                    title = record and record['name']
+                else:
+                    record = await fetch_event(session, listing_id) if listing_id else None
+                    title = record and record['title']
+            if record is None:
+                await interaction.followup.send(f"Couldn't find {platform.name} listing `{listing}`.", ephemeral=True)
+                return
+            mine[platform.value] = {'id': listing_id, 'link': record['link']}
+            note = f"Linked to **{title}** <{record['link']}>."
+        save_wrapups(marks)
+        await interaction.followup.send(f"**{match['name']}** ({fmt_day(match['start'])}), {platform.name}: {note}", ephemeral=True)
+
     # ---------- Monday digest (off unless configured) ----------
 
     @tasks.loop(minutes=30)
@@ -832,6 +1025,7 @@ class OfficerTools(commands.Cog):
         embeds = [
             build_embed("📅 Upcoming events check", check_events(events)),
             build_embed("🧾 vTools reporting", [l for l in await check_vtools(events) if not l.startswith("✅")] or ["All caught up."], IEEE_GOLD),
+            build_embed("🔗 Listings vs. calendar", format_crosscheck(await crosscheck_rows(events), problems_only=True)),
             build_embed("🧹 Event wrap-up", format_wrapups(await wrapup_rows(events), open_only=True)),
             build_embed("🪧 Tabling", await check_tabling()),
             build_embed("⏰ Deadlines", check_deadlines(), IEEE_GOLD),
