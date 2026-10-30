@@ -54,16 +54,19 @@ class Snapshot:
 
 # ---------- calendar ----------
 
-def fetch_calendar(days_back=WINDOW_BACK_DAYS, days_ahead=WINDOW_AHEAD_DAYS):
-    """Timed calendar events in a window, as dicts (tabling sessions excluded)."""
+def fetch_calendar(days_back=WINDOW_BACK_DAYS, days_ahead=WINDOW_AHEAD_DAYS, between=None):
+    """Timed calendar events in a window, as dicts (tabling sessions excluded).
+
+    between=(start, end) fetches that exact span instead of days around now.
+    """
     service = get_calendar_service()
     now = datetime.datetime.now(datetime.timezone.utc)
+    time_min, time_max = between or (now - datetime.timedelta(days=days_back), now + datetime.timedelta(days=days_ahead))
     items, token = [], None
     while True:
         result = service.events().list(
             calendarId=os.getenv('GOOGLE_CALENDAR_ID'),
-            timeMin=(now - datetime.timedelta(days=days_back)).isoformat(),
-            timeMax=(now + datetime.timedelta(days=days_ahead)).isoformat(),
+            timeMin=time_min.isoformat(), timeMax=time_max.isoformat(),
             singleEvents=True, orderBy='startTime', maxResults=250, pageToken=token,
         ).execute(num_retries=3)
         items.extend(result.get('items', []))

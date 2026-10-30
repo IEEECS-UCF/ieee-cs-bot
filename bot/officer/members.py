@@ -44,7 +44,8 @@ def decide(user_id, status, officer_id, reason="", today=None):
     if record is None:
         return None
     today = today or datetime.date.today()
-    record.update(status=status, reviewed_by=officer_id, reason=reason or "", year=today.year)
+    record.update(status=status, reviewed_by=officer_id, reason=reason or "", year=today.year,
+                  decided=today.isoformat())
     save_record(user_id, record)
     return record
 
@@ -60,6 +61,7 @@ def recognize(user_id, today=None):
         return None
     record = {"number": (record or {}).get("number"), "email": (record or {}).get("email", ""),
               "status": "verified", "source": "role", "year": today.year, "submitted": today.isoformat(),
+              "decided": today.isoformat(),
               "reviewed_by": None, "reason": "", "card": (record or {}).get("card")}
     save_record(user_id, record)
     return record

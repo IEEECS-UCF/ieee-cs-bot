@@ -596,6 +596,31 @@ class ChapterView(discord.ui.View):
             return
         await interaction.response.send_message("Which task?", view=CloseTask(self, tasks), ephemeral=True)
 
+    @discord.ui.button(label="Monthly report", style=discord.ButtonStyle.success, row=1)
+    async def monthly_report(self, interaction, button):
+        await interaction.response.send_message("Which month?", view=MonthPicker(self.cog), ephemeral=True)
+
+class MonthPicker(discord.ui.View):
+    """This month so far and the five before it."""
+    def __init__(self, cog):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.cog = cog
+        today = datetime.datetime.now(TZ).date()
+        year, month, options = today.year, today.month, []
+        for i in range(6):
+            label = datetime.date(year, month, 1).strftime("%B %Y") + (" (so far)" if i == 0 else "")
+            options.append(discord.SelectOption(label=label, value=f"{year}-{month}", default=i == 1))
+            year, month = (year - 1, 12) if month == 1 else (year, month - 1)
+        select = discord.ui.Select(placeholder="Pick a month", options=options)
+        select.callback = self.pick
+        self.add_item(select)
+
+    async def pick(self, interaction):
+        year, month = map(int, interaction.data["values"][0].split("-"))
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        embeds, file = await self.cog.monthly_report(year, month)
+        await interaction.followup.send(embeds=embeds, file=discord.File(*file), ephemeral=True)
+
 class RemoveDeadline(discord.ui.View):
     def __init__(self, chapter, deadlines):
         super().__init__(timeout=VIEW_TIMEOUT)

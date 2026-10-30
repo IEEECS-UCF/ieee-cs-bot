@@ -9,7 +9,7 @@ from discord.ext import commands, tasks
 from bot.cogs import volunteer
 from bot.utils.alerts import alert
 from bot.utils.event_text import same_place
-from bot.officer import render, members
+from bot.officer import render, members, metrics
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
 from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TABLING_SHEET_ID
 from bot.officer.steps import event_steps, problems, owner_of, room_state
@@ -20,8 +20,9 @@ from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton
 # steps, in four phases), and every screen shows that same status.
 #   /officer events   the board: every active event, one line each
 #   /officer event    one event's card, with a menu that fixes each step
-#   /officer chapter  deadlines, tabling and volunteer tasks
+#   /officer chapter  deadlines, tabling, volunteer tasks, members, monthly report
 # The digest (DIGEST_DAYS) and the daily nudges are drawn from the same steps.
+# Last month's report posts on the 1st (METRICS_CHANNEL_ID).
 
 WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 DIGEST_DAYS = {WEEKDAYS[d.strip()[:3].lower()] for d in os.getenv('DIGEST_DAYS', 'sun,wed').split(",")
@@ -29,12 +30,18 @@ DIGEST_DAYS = {WEEKDAYS[d.strip()[:3].lower()] for d in os.getenv('DIGEST_DAYS',
 DIGEST_HOUR = 10
 NUDGE_HOUR = 11
 NUDGE_REPEAT_DAYS = 7
+REPORT_HOUR = 10
 TABLING_TASK_DAYS = 14
 
 
 def digest_due(now, last_day):
     """Post on a digest day, once, after DIGEST_HOUR."""
     return now.weekday() in DIGEST_DAYS and now.hour >= DIGEST_HOUR and last_day != now.date().isoformat()
+
+def report_due(now, posted):
+    """Last month's key if its report should post now (the 1st, after REPORT_HOUR), else None."""
+    key = metrics.month_key(*metrics.previous_month(now.year, now.month))
+    return key if now.day == 1 and now.hour >= REPORT_HOUR and posted != key else None
 
 def due_nudges(open_steps, sent, today):
     """{event id: [steps]} not mentioned in the last NUDGE_REPEAT_DAYS."""
@@ -60,6 +67,7 @@ class Officer(commands.Cog):
         bot.add_dynamic_items(OpenEventButton)
         self.digest_channel_id = int(os.getenv('OFFICER_DIGEST_CHANNEL_ID') or 0) or None
         self.nudge_channel_id = int(os.getenv('NUDGE_CHANNEL_ID') or 0) or None
+        self.metrics_channel_id = int(os.getenv('METRICS_CHANNEL_ID') or 0) or None
 
     async def cog_load(self):
         sync = self.bot.get_cog("CalendarSync")
@@ -75,11 +83,16 @@ class Officer(commands.Cog):
             self.daily_nudges.start()
         else:
             print("Event nudges disabled: NUDGE_CHANNEL_ID not set.")
+        if self.metrics_channel_id:
+            self.monthly_metrics.start()
+        else:
+            print("Monthly report disabled: METRICS_CHANNEL_ID not set.")
 
     def cog_unload(self):
         self.warm.cancel()
         self.officer_digest.cancel()
         self.daily_nudges.cancel()
+        self.monthly_metrics.cancel()
         self.bot.remove_dynamic_items(OpenEventButton)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -114,7 +127,7 @@ class Officer(commands.Cog):
     async def event_cmd(self, interaction: discord.Interaction, event: str):
         await open_card(self, interaction, event)
 
-    @officer.command(name="chapter", description="Deadlines, tabling and volunteer tasks.")
+    @officer.command(name="chapter", description="Deadlines, tabling, volunteer tasks, members and the monthly report.")
     async def chapter_cmd(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         view = ChapterView(self)
@@ -152,6 +165,19 @@ class Officer(commands.Cog):
         today = datetime.datetime.now(TZ).date()
         return render.chapter_embeds(rows, volunteer.load_tasks(), today, members.counts(today),
                                      os.getenv('GUILD_ID'))
+
+    async def monthly_report(self, year, month):
+        """(embeds, (csv bytes, filename)) for a month, comparing with the month before."""
+        guild = self.bot.get_guild(int(os.getenv('GUILD_ID')))
+        summary = metrics.summarize(await metrics.gather_month(year, month), year, month, guild)
+        metrics.remember(summary)
+        prev = metrics.previous_month(year, month)
+        previous = metrics.remembered(*prev)
+        if previous is None:
+            previous = metrics.summarize(await metrics.gather_month(*prev), *prev, guild)
+            previous.pop("discord_members", None)  # today's count, not that month's
+            metrics.remember(previous)
+        return metrics.report_embeds(summary, previous), metrics.csv_file(summary)
 
     def volunteer_channel(self):
         channel_id = os.getenv('VOLUNTEER_CHANNEL_ID')
@@ -259,6 +285,36 @@ class Officer(commands.Cog):
                 allowed_mentions=discord.AllowedMentions(everyone=False, users=False,
                                                          roles=[discord.Object(int(role))] if role and i == 0 else False))
         save_json(DIGEST_STATE_FILE, {'day': now.date().isoformat()})
+
+    @tasks.loop(minutes=30)
+    async def monthly_metrics(self):
+        try:
+            await self.post_report_if_due()
+        except Exception as e:
+            await alert(self.bot, "Monthly report", e)
+
+    @monthly_metrics.before_loop
+    async def before_metrics(self):
+        await self.bot.wait_until_ready()
+
+    async def post_report_if_due(self, force_month=None):
+        now = datetime.datetime.now(TZ)
+        state = load_json(metrics.METRICS_FILE, {"months": {}})
+        key = force_month or report_due(now, state.get("posted"))
+        if key is None:
+            return
+        channel = self.bot.get_channel(self.metrics_channel_id)
+        if channel is None:
+            print("Error: Could not find the monthly report channel.")
+            return
+        embeds, file = await self.monthly_report(*map(int, key.split("-")))
+        await channel.send(content="**Monthly report**", embeds=embeds, file=discord.File(*file),
+                           allowed_mentions=discord.AllowedMentions.none())
+        if force_month is None:
+            state = load_json(metrics.METRICS_FILE, {"months": {}})
+            state["posted"] = key
+            save_json(metrics.METRICS_FILE, state)
+        print(f"Posted the monthly report for {key}")
 
     @tasks.loop(minutes=30)
     async def daily_nudges(self):
