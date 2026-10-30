@@ -41,6 +41,8 @@ class IEEECSBot(commands.Bot):
 
     async def on_app_command_error(self, interaction, error):
         """Log slash-command failures and tell the user instead of failing silently."""
+        if isinstance(error, discord.app_commands.CheckFailure):
+            return  # the check already told the user why
         name = interaction.command.qualified_name if interaction.command else "?"
         logging.getLogger("bot").error("Command /%s failed", name, exc_info=error)
         message = "Something went wrong running that command. It has been logged."

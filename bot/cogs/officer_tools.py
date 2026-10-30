@@ -28,6 +28,9 @@ CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
 WRAPUPS_FILE = "data/wrapups.json"    # calendar event ID -> items officers marked or linked
 DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
 GITHUB_ORG = os.getenv('GITHUB_ORG', 'IEEECS-UCF')
+# Only these roles may use /officer, whatever Discord's command permissions say
+# (Officer, Exec). Discord's own setting (Manage Events) is a second layer.
+OFFICER_ROLE_IDS = {int(r) for r in os.getenv('OFFICER_ROLE_IDS', '1449921163248533525,1424610929424994477').split(',') if r.strip()}
 NOT_SLIDE_REPOS = {'website', 'ieeecs-ucf.github.io', 'ieee-cs-bot'}
 
 VTOOLS_LOOKBACK_DAYS = 90
@@ -425,6 +428,15 @@ class OfficerTools(commands.Cog):
 
     def cog_unload(self):
         self.weekly_digest.cancel()
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """Every /officer command: Officer or Exec role required."""
+        roles = {role.id for role in getattr(interaction.user, 'roles', [])}
+        if roles & OFFICER_ROLE_IDS:
+            return True
+        print(f"Refused /officer for {interaction.user} ({interaction.user.id}): no officer role")
+        await interaction.response.send_message("These commands are for officers only.", ephemeral=True)
+        return False
 
     async def calendar(self, days_back, days_ahead):
         return await asyncio.to_thread(fetch_calendar, days_back, days_ahead)
