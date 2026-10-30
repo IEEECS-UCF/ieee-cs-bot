@@ -12,6 +12,7 @@ dependencies = [
     "google-auth>=2.49.1",
     "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.2.2",
+    "segno>=1.6.6",
 ]
 
 [tool.uv]

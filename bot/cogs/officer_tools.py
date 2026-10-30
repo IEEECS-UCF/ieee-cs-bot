@@ -17,12 +17,14 @@ from dateutil import parser
 from bot.utils.gcal_client import get_calendar_service
 from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.utils.vtools_client import fetch_branch_events
+from bot.utils import checkin_client
 
 TZ = ZoneInfo(os.getenv('REMINDER_TZ', 'America/New_York'))
 BRANCH_SPOID = os.getenv('VTOOLS_SPOID', 'SBC13081')
 TABLING_SHEET_ID = os.getenv('TABLING_SHEET_ID')
 DEADLINES_FILE = "bot/deadlines.json"
 DIGEST_STATE_FILE = "data/digest.json"
+CHECKINS_FILE = "data/checkins.json"  # calendar event ID -> check-in form
 
 VTOOLS_LOOKBACK_DAYS = 90
 EVENTS_LOOKAHEAD_DAYS = 45
@@ -31,6 +33,8 @@ TABLING_LOOKAHEAD_DAYS = 60
 DEADLINE_LOOKAHEAD_DAYS = 90
 DIGEST_WEEKDAY = 0         # Monday
 DIGEST_HOUR = 10           # local time, after the 9 AM weekly summary
+CHECKIN_PICK_BACK_DAYS = 2    # events offered by /officer checkin create
+CHECKIN_PICK_AHEAD_DAYS = 30
 
 EMBED_LIMIT = 4000
 
@@ -58,6 +62,7 @@ def fetch_calendar(days_back, days_ahead):
         if item.get('status') == 'cancelled' or 'dateTime' not in item.get('start', {}):
             continue
         events.append({
+            'id': item['id'],
             'start': parser.isoparse(item['start']['dateTime']).astimezone(TZ),
             'end': parser.isoparse(item['end']['dateTime']).astimezone(TZ),
             'name': " ".join((item.get('summary') or 'Untitled').split()),
@@ -76,6 +81,18 @@ async def fetch_tabling(session):
     header_at = next(i for i, r in enumerate(rows) if 'Event Name' in r)
     header = [h.strip() for h in rows[header_at]]
     return [dict(zip(header, r)) for r in rows[header_at + 1:] if any(c.strip() for c in r)]
+
+def load_checkins():
+    if not os.path.exists(CHECKINS_FILE):
+        return {}
+    with open(CHECKINS_FILE) as f:
+        return json.load(f)
+
+def save_checkins(checkins):
+    tmp = CHECKINS_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(checkins, f, indent=2)
+    os.replace(tmp, CHECKINS_FILE)
 
 def load_deadlines():
     if not os.path.exists(DEADLINES_FILE):
@@ -117,8 +134,20 @@ def check_events(events):
                      + (f"\n  ↳ {', '.join(due)}" if due else ""))
     return lines or ["No upcoming events in the calendar."]
 
+async def checkin_note(event, checkins):
+    """Check-in counts to copy into vTools, if the event had a check-in form."""
+    form = checkins.get(event.get('id'))
+    if not form or not checkin_client.configured():
+        return ""
+    try:
+        r = await checkin_client.results(form['formId'])
+    except Exception as e:
+        return f" · check-in unavailable ({e})"
+    return f" · check-in: **{r['ieee']} IEEE, {r['guests']} guests**"
+
 async def check_vtools(events):
     now = datetime.datetime.now(TZ)
+    checkins = load_checkins()
     # Tabling isn't an event we report
     past = [e for e in events if e['end'] < now and 'tabling' not in e['name'].casefold()]
     lines, cache = [], {}
@@ -130,9 +159,10 @@ async def check_vtools(events):
             match = best_match(e, cache[day])
             label = f"`{fmt_day(e['start'])}` {e['name']}"
             if match is None:
-                lines.append(f"❌ {label}: **not in vTools**")
+                lines.append(f"❌ {label}: **not in vTools**" + await checkin_note(e, checkins))
             elif match.get('ieee-attending') is None:
-                lines.append(f"⚠️ {label}: in vTools, **no attendance filed** · <{match['link']}>")
+                lines.append(f"⚠️ {label}: in vTools, **no attendance filed** · <{match['link']}>"
+                             + await checkin_note(e, checkins))
             else:
                 ieee, guests = match['ieee-attending'], match.get('guests-attending') or 0
                 lines.append(f"✅ {label}: {ieee + guests} ({ieee} IEEE, {guests} guests)")
@@ -207,8 +237,13 @@ class OfficerTools(commands.Cog):
         default_permissions=discord.Permissions(manage_events=True),
     )
 
+    checkin = app_commands.Group(
+        name="checkin", description="Event check-in forms and attendance counts.", parent=officer,
+    )
+
     def __init__(self, bot):
         self.bot = bot
+        self._pick_cache = (None, [])  # (fetched at, events) for autocomplete
         channel = os.getenv('OFFICER_DIGEST_CHANNEL_ID')
         self.digest_channel_id = int(channel) if channel else None
         if self.digest_channel_id:
@@ -253,6 +288,89 @@ class OfficerTools(commands.Cog):
     @officer.command(name="deadlines", description="Chapter deadlines in the next 90 days.")
     async def deadlines_cmd(self, interaction: discord.Interaction):
         await interaction.response.send_message(embed=build_embed("⏰ Deadlines", check_deadlines(), IEEE_GOLD), ephemeral=True)
+
+    # ---------- check-in ----------
+
+    async def pickable_events(self):
+        """Recent and upcoming calendar events, cached briefly for autocomplete."""
+        fetched, events = self._pick_cache
+        now = datetime.datetime.now(TZ)
+        if fetched is None or (now - fetched).total_seconds() > 300:
+            events = await self.calendar(CHECKIN_PICK_BACK_DAYS, CHECKIN_PICK_AHEAD_DAYS)
+            self._pick_cache = (now, events)
+        return events
+
+    async def event_autocomplete(self, interaction: discord.Interaction, current: str):
+        events = await self.pickable_events()
+        return [app_commands.Choice(name=f"{fmt_day(e['start'])} · {e['name']}"[:100], value=e['id'])
+                for e in events if current.casefold() in e['name'].casefold()][:25]
+
+    async def form_autocomplete(self, interaction: discord.Interaction, current: str):
+        forms = sorted(load_checkins().items(), key=lambda kv: kv[1]['start'], reverse=True)
+        return [app_commands.Choice(name=f"{form['day']} · {form['name']}"[:100], value=key)
+                for key, form in forms if current.casefold() in form['name'].casefold()][:25]
+
+    @checkin.command(name="create", description="Make (or fetch) the check-in form and QR code for an event.")
+    @app_commands.describe(event="The calendar event")
+    @app_commands.autocomplete(event=event_autocomplete)
+    async def checkin_create(self, interaction: discord.Interaction, event: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        if not checkin_client.configured():
+            await interaction.followup.send("Check-in isn't configured (CHECKIN_URL / CHECKIN_SECRET).", ephemeral=True)
+            return
+        match = next((e for e in await self.pickable_events() if e['id'] == event), None)
+        if match is None:
+            await interaction.followup.send("Pick an event from the list.", ephemeral=True)
+            return
+        day = fmt_day(match['start'])
+        try:
+            form = await checkin_client.create_form(match['name'], day, match['id'])
+        except checkin_client.CheckinError as e:
+            await interaction.followup.send(f"The check-in script returned an error: {e}", ephemeral=True)
+            return
+        checkins = load_checkins()
+        checkins[match['id']] = {'formId': form['formId'], 'url': form['url'], 'shortUrl': form['shortUrl'],
+                                 'name': match['name'], 'day': day, 'start': match['start'].isoformat()}
+        save_checkins(checkins)
+
+        link = form['shortUrl'] or form['url']
+        qr = discord.File(io.BytesIO(checkin_client.qr_png(link)), filename="checkin-qr.png")
+        embed = create_base_embed(
+            title=f"✅ Check-in: {match['name']}",
+            description=(f"**Form:** {link}\n\nPut the QR on a slide or print it for the door. "
+                         f"Afterwards, run `/officer checkin results` for the vTools numbers."
+                         + ("\n\n*This form already existed; same link as before.*" if form.get('existed') else "")),
+            color=IEEE_BLUE)
+        embed.set_image(url="attachment://checkin-qr.png")
+        await interaction.followup.send(embed=embed, file=qr, ephemeral=True)
+
+    @checkin.command(name="results", description="Attendance from an event's check-in form (IEEE vs. guests for vTools).")
+    @app_commands.describe(event="An event with a check-in form")
+    @app_commands.autocomplete(event=form_autocomplete)
+    async def checkin_results(self, interaction: discord.Interaction, event: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        form = load_checkins().get(event)
+        if form is None:
+            await interaction.followup.send("No check-in form for that event. Pick one from the list.", ephemeral=True)
+            return
+        try:
+            r = await checkin_client.results(form['formId'])
+        except checkin_client.CheckinError as e:
+            await interaction.followup.send(f"The check-in script returned an error: {e}", ephemeral=True)
+            return
+        lines = [
+            f"**Checked in:** {r['total']}",
+            f"**For vTools:** IEEE attending **{r['ieee']}**, guests **{r['guests']}**",
+        ]
+        if r['notSure']:
+            lines.append(f"({r['notSure']} answered \"Not sure\" about IEEE membership and are counted as guests.)")
+        heard = sorted(r['heard'].items(), key=lambda kv: -kv[1])
+        if heard:
+            lines.append("\n**How they heard about it:**")
+            lines += [f"{source}: {count}" for source, count in heard]
+        lines.append(f"\nForm: {form['shortUrl'] or form['url']}")
+        await interaction.followup.send(embed=build_embed(f"🧾 Check-in results: {form['name']} ({form['day']})", lines, IEEE_GOLD),
+                                        ephemeral=True)
 
     # ---------- Monday digest (off unless configured) ----------
 
