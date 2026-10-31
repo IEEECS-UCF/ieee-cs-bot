@@ -124,9 +124,15 @@ def test_nudge_posts_get_a_tag_by_kind():
     assert officer_cog.forum_tag([], event(name="TechX")) is None
 
 class Forum(discord.ForumChannel):
-    def __init__(self):
-        self.made = []
+    def __init__(self, threads=(), archived=()):
+        self.made, self._open, self._archived = [], list(threads), list(archived)
     available_tags = TAGS
+    @property
+    def threads(self):
+        return self._open
+    async def archived_threads(self, limit=None):
+        for t in self._archived:
+            yield t
     async def create_thread(self, name, content, applied_tags):
         self.made.append((name, [t.name for t in applied_tags]))
         return types.SimpleNamespace(thread=types.SimpleNamespace(id=99))
@@ -138,3 +144,21 @@ async def test_new_nudge_post_carries_the_tag():
     thread = await cog.event_thread(forum, event(gid="g1", name="Intro to gem5"), state)
     assert thread.id == 99 and state["threads"] == {"g1": 99}
     assert forum.made[0][1] == ["workshop"]
+
+def post(i, name, archived=False):
+    async def edit(archived):
+        post.unarchived.append(i)
+    return types.SimpleNamespace(id=i, name=name, archived=archived, edit=edit)
+post.unarchived = []
+
+async def test_officers_existing_post_is_used_instead_of_a_new_one():
+    recent = discord.utils.time_snowflake(discord.utils.utcnow())
+    officers = post(recent - 10, "TechX ", archived=True)
+    lost = post(recent, "TechX (Sat Nov 14)")
+    old = post(1, "TechX", archived=True)                      # years ago: another TechX
+    forum = Forum(threads=[lost], archived=[officers, old])
+    cog = officer_cog.Officer.__new__(officer_cog.Officer)
+    state = {"threads": {}}
+    thread = await cog.event_thread(forum, event(gid="t1", name="TechX"), state)
+    assert thread is officers and state["threads"] == {"t1": officers.id}
+    assert forum.made == [] and post.unarchived == [officers.id]

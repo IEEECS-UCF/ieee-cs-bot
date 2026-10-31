@@ -66,6 +66,23 @@ def forum_tag(tags, event):
     want = FORUM_TAGS.get(event_text.kind(event), 'general')
     return by_name.get(want) or by_name.get('general') or next(iter(tags), None)
 
+POST_LOOKBACK_DAYS = 90  # archived posts older than this belong to some earlier event
+
+def matching_post(threads, names):
+    """The oldest post named exactly like the event (officers' own, or one the bot lost track of), or None."""
+    wanted = {n.strip().casefold() for n in names}
+    found = [t for t in threads if t.name.strip().casefold() in wanted]
+    return min(found, key=lambda t: t.id, default=None)
+
+async def recent_posts(channel):
+    """Open posts in the channel, plus ones archived within POST_LOOKBACK_DAYS."""
+    posts = list(channel.threads)
+    cutoff = discord.utils.utcnow() - datetime.timedelta(days=POST_LOOKBACK_DAYS)
+    async for t in channel.archived_threads(limit=100):
+        if discord.utils.snowflake_time(t.id) >= cutoff:
+            posts.append(t)
+    return posts
+
 
 class Officer(commands.Cog):
     officer = app_commands.Group(
@@ -456,7 +473,11 @@ class Officer(commands.Cog):
                     await thread.edit(archived=False)
                 return thread
         name = f"{event['name']} ({render.fmt_day(event['start'])})"[:100]
-        if isinstance(channel, discord.ForumChannel):
+        thread = matching_post(await recent_posts(channel), (event['name'], name))
+        if thread is not None:
+            if thread.archived:
+                await thread.edit(archived=False)
+        elif isinstance(channel, discord.ForumChannel):
             tag = forum_tag(channel.available_tags, event)
             created = await channel.create_thread(name=name, content=f"Tracking **{event['name']}**: open items get posted here.",
                                                   applied_tags=[tag] if tag else [])
