@@ -7,6 +7,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from bot.cogs import volunteer
+from bot.utils import event_text
 from bot.utils.alerts import alert
 from bot.officer import render, members, metrics, tabling
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
@@ -56,6 +57,14 @@ def due_nudges(open_steps, sent, today):
         if fresh:
             due[gid] = fresh
     return due
+
+FORUM_TAGS = {'workshops': 'workshop', 'prodev': 'prodev'}  # event kind -> forum tag; anything else is 'general'
+
+def forum_tag(tags, event):
+    """The forum tag for an event's nudge post: by kind, else 'general', else the first tag (None if there are none)."""
+    by_name = {t.name.casefold(): t for t in tags}
+    want = FORUM_TAGS.get(event_text.kind(event), 'general')
+    return by_name.get(want) or by_name.get('general') or next(iter(tags), None)
 
 
 class Officer(commands.Cog):
@@ -448,7 +457,9 @@ class Officer(commands.Cog):
                 return thread
         name = f"{event['name']} ({render.fmt_day(event['start'])})"[:100]
         if isinstance(channel, discord.ForumChannel):
-            created = await channel.create_thread(name=name, content=f"Tracking **{event['name']}**: open items get posted here.")
+            tag = forum_tag(channel.available_tags, event)
+            created = await channel.create_thread(name=name, content=f"Tracking **{event['name']}**: open items get posted here.",
+                                                  applied_tags=[tag] if tag else [])
             thread = created.thread
         else:
             starter = await channel.send(f"📌 **{event['name']}** ({render.fmt_day(event['start'])}): open items go in this thread.")

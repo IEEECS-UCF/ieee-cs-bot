@@ -110,3 +110,31 @@ def test_posted_announcement_allows_only_written_mentions():
     allowed = views.mentions_in("# Hey <@&111>! ...")
     assert allowed.everyone is False and [r.id for r in allowed.roles] == [111]
     assert views.mentions_in("# Hey @everyone!").everyone is True
+
+
+# ---------- nudge posts in a forum that requires tags ----------
+
+TAGS = [types.SimpleNamespace(id=i, name=n) for i, n in enumerate(["workshop", "project", "prodev", "general"])]
+
+def test_nudge_posts_get_a_tag_by_kind():
+    assert officer_cog.forum_tag(TAGS, event(name="Bash Scripting Workshop")).name == "workshop"
+    assert officer_cog.forum_tag(TAGS, event(name="Resume Review Night")).name == "prodev"
+    assert officer_cog.forum_tag(TAGS, event(name="Board Game Night")).name == "general"
+    assert officer_cog.forum_tag(TAGS[:2], event(name="TechX")).name == "workshop"   # no 'general': first tag
+    assert officer_cog.forum_tag([], event(name="TechX")) is None
+
+class Forum(discord.ForumChannel):
+    def __init__(self):
+        self.made = []
+    available_tags = TAGS
+    async def create_thread(self, name, content, applied_tags):
+        self.made.append((name, [t.name for t in applied_tags]))
+        return types.SimpleNamespace(thread=types.SimpleNamespace(id=99))
+
+async def test_new_nudge_post_carries_the_tag():
+    forum = Forum()
+    cog = officer_cog.Officer.__new__(officer_cog.Officer)
+    state = {"threads": {}}
+    thread = await cog.event_thread(forum, event(gid="g1", name="Intro to gem5"), state)
+    assert thread.id == 99 and state["threads"] == {"g1": 99}
+    assert forum.made[0][1] == ["workshop"]
