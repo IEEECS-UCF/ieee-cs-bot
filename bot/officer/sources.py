@@ -13,7 +13,7 @@ from dateutil import parser
 from bot.utils.gcal_client import get_calendar_service
 from bot.utils.vtools_client import fetch_branch_events, fetch_event as fetch_vtools_event
 from bot.utils import knightconnect_client as kc
-from bot.utils import checkin_client
+from bot.utils import checkin_client, event_text
 from bot.cogs.calendar_sync import calendar_flyer
 from bot.officer.data import EventStore, SKIPPED
 
@@ -147,7 +147,9 @@ def match_slides(events, repos, store=None):
         if link:
             found[e['id']] = dict(link, linked=True)
             claimed.add(link['name'])
-    for e in events:
+    # Only workshops get a repo, so GBMs and socials can't take one by name or date
+    workshops = [e for e in events if event_text.kind(e) == 'workshops']
+    for e in workshops:
         if e['id'] in found:
             continue
         best, score = None, 0.0
@@ -160,7 +162,7 @@ def match_slides(events, repos, store=None):
         if best and score >= 0.6:
             found[e['id']] = {'name': best['name'], 'url': best.get('html_url', '')}
             claimed.add(best['name'])
-    for e in events:
+    for e in workshops:
         if e['id'] in found:
             continue
         window_start = e['start'] - datetime.timedelta(days=1)

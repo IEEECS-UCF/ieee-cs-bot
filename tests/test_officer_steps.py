@@ -128,6 +128,12 @@ def test_socials_skip_slides():
     social = event(name="Board Game Night", days=-2)
     assert by_key(st.event_steps(social, snapshot([social]), NOW))["slides"].state == st.SKIP
 
+def test_only_workshops_need_slides():
+    gbm = event(name="Fall GBM #2", days=-2)
+    assert by_key(st.event_steps(gbm, snapshot([gbm]), NOW))["slides"].state == st.SKIP
+    linked = snapshot([gbm], slides={"g1": {"name": "GBM-2-Slides", "linked": True}})
+    assert by_key(st.event_steps(gbm, linked, NOW))["slides"].state == st.DONE
+
 def test_check_in_counts_show_on_attendance():
     past = event(days=-1)
     snap = snapshot([past], store={"g1": {"checkin": {"formId": "f", "url": "u"}}},

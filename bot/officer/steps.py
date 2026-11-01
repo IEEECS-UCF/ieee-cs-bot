@@ -24,7 +24,6 @@ ACTIVE_DAYS = 7  # a step shows as "to do" this many days before it's due
 
 # Default owner by kind of event ("workshops:<id>,other:<id>"); "other" covers GBMs, TechX...
 DEFAULT_OWNERS = dict(pair.split(":", 1) for pair in os.getenv('DEFAULT_OWNERS', '').split(",") if ":" in pair)
-SOCIAL_WORDS = dict(event_text.ROLE_WORDS)['socials']
 # Steps only officers can mark (announcement, recap) aren't tracked for events before this date
 TRACKING_START = datetime.date.fromisoformat(os.getenv('TRACKING_START', '2026-10-30'))
 
@@ -214,7 +213,8 @@ def wrap_steps(e, record, marks, snap, today, end, now):
                           timed(today, end + datetime.timedelta(days=3), end), where + check, ["attendance"]))
 
     slides = snap.slides.get(e['id'])
-    if any(w in e['name'].casefold() for w in SOCIAL_WORDS) or marks.get('slides') == SKIPPED:
+    # Only workshops put slides on GitHub; GBMs, socials and TechX don't, unless someone links them
+    if (event_text.kind(e) != 'workshops' and not slides) or marks.get('slides') == SKIPPED:
         steps.append(Step("slides", "Wrap up", "Slides", SKIP, "not needed", ["slides", "mark:slides"]))
     elif slides or marks.get('slides') == 'done':
         detail = slides['name'] + (" (linked by hand)" if slides.get('linked') else "") if slides else "marked done"

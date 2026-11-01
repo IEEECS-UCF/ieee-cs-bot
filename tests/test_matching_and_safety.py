@@ -5,7 +5,7 @@ import types
 
 import discord
 
-from bot.officer import sources, views, data, steps as st
+from bot.officer import sources, views, data
 from bot.officer.data import EventStore
 from bot.cogs import event_reminders
 from bot.utils import event_text
@@ -13,6 +13,14 @@ from tests.officer_fixtures import NOW, event, snapshot, listing
 
 
 # ---------- matching listings to events ----------
+
+def test_only_workshops_are_matched_to_slide_repos():
+    gbm = event(gid="gbm", name="Fall GBM #2", days=-10)
+    workshop = event(gid="emb", name="Intro to Embedded", days=-20)
+    repos = [{"name": "Intro-to-GPU-Kernels", "html_url": "u1", "created_at": (gbm["start"] + datetime.timedelta(days=2)).isoformat()},
+             {"name": "Intro-to-Embedded", "html_url": "u2", "created_at": NOW.isoformat()}]
+    found = sources.match_slides([gbm, workshop], repos)
+    assert found == {"emb": {"name": "Intro-to-Embedded", "url": "u2"}}   # the GBM doesn't take the repo made two days later
 
 def test_a_listing_needs_a_similar_name_not_just_the_same_time():
     gem5 = event(gid="gem5", name="Intro to gem5")
@@ -106,7 +114,6 @@ def test_a_corrupt_file_is_moved_aside_not_overwritten():
 
 def test_every_feature_reads_the_same_keywords():
     assert [(k, w) for k, _, w in event_reminders.ROLE_KEYWORDS] == event_text.ROLE_WORDS
-    assert st.SOCIAL_WORDS == dict(event_text.ROLE_WORDS)["socials"]
     tailgate = {"name": "Homecoming Tailgate"}
     assert event_text.kind(tailgate) == "socials"
     assert event_reminders.role_for("Homecoming Tailgate") == 222

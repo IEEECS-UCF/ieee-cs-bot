@@ -35,7 +35,7 @@ def test_summary_counts_events_attendance_and_follow_through():
     assert s["kinds"]["Workshops"] == {"events": 1, "attendance": 20}
     assert s["heard"] == {"Discord": 18, "Instagram": 7}
     assert s["follow_up"]["attendance"] == [1, 3]                          # only the workshop is in vTools
-    assert s["follow_up"]["slides"][1] == 2                                # the social doesn't need slides
+    assert s["follow_up"]["slides"][1] == 1                                # only the workshop needs slides
 
 def test_month_in_progress_is_not_remembered():
     s = metrics.summarize(october(), 2026, 11, now=NOW)
