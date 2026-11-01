@@ -171,3 +171,21 @@ async def test_read_only_recreates_deleted_discord_event():
     ITEMS["F"] = item("F", "GBM #3"); g = Guild([]); cog = new_cog(False); await sync(cog, g)
     g.events = []; CALLS.clear(); await sync(cog, g)
     assert done("discord.create") and not any(c[0].startswith("gcal") for c in CALLS)
+
+
+def test_each_thread_gets_its_own_calendar_service(monkeypatch, tmp_path):
+    """httplib2 connections break when two threads share one, so the service is per thread."""
+    import threading
+    from bot.utils import gcal_client
+    creds = tmp_path / "creds.json"
+    creds.write_text("{}")
+    monkeypatch.setattr(gcal_client, "CREDENTIALS_FILE", str(creds))
+    monkeypatch.setattr(gcal_client.service_account.Credentials, "from_service_account_file", lambda *a, **k: None)
+    monkeypatch.setattr(gcal_client, "build", lambda *a, **k: object())
+    monkeypatch.setattr(gcal_client, "_local", threading.local())
+    here = gcal_client.get_calendar_service()
+    other = []
+    t = threading.Thread(target=lambda: other.append(gcal_client.get_calendar_service()))
+    t.start(); t.join()
+    assert gcal_client.get_calendar_service() is here
+    assert other[0] is not here

@@ -1,5 +1,6 @@
 import datetime
 import os
+import threading
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -9,20 +10,22 @@ from googleapiclient.errors import HttpError
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 CREDENTIALS_FILE = 'credentials/google_service.json'
 
-_service = None
+# One service per thread: its httplib2 connection isn't thread-safe, and calls
+# run in asyncio.to_thread workers that can overlap.
+_local = threading.local()
 
 def get_calendar_service():
-    """Authenticates and returns the (cached) Google Calendar service object."""
-    global _service
-    if _service is None:
+    """Authenticates and returns this thread's (cached) Google Calendar service object."""
+    service = getattr(_local, 'service', None)
+    if service is None:
         if not os.path.exists(CREDENTIALS_FILE):
             raise FileNotFoundError(f"Missing Google credentials at {CREDENTIALS_FILE}")
 
         creds = service_account.Credentials.from_service_account_file(
             CREDENTIALS_FILE, scopes=SCOPES
         )
-        _service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
-    return _service
+        service = _local.service = build('calendar', 'v3', credentials=creds, cache_discovery=False)
+    return service
 
 def fetch_upcoming_events(calendar_id: str, days: int = 7):
     """Fetches all events (every page) from now through the next 'days'.
