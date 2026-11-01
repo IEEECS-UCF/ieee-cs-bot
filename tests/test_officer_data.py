@@ -48,3 +48,27 @@ def test_deadlines_add_and_hide():
     data.remove_deadline(data.deadline_key(*shipped[0]))
     names = [w for _, w in data.load_deadlines()]
     assert "TEST" in names and shipped[0][1] not in names
+
+
+async def test_checkin_results_are_fetched_side_by_side(monkeypatch):
+    """Each form takes ~1.5 s to read, so the refresh shouldn't wait on them one at a time."""
+    import asyncio
+    from bot.officer import sources
+    running, peak = 0, 0
+    async def results(form_id):
+        nonlocal running, peak
+        running += 1; peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        if form_id == "bad":
+            raise RuntimeError("script down")
+        return {"total": int(form_id[1:])}
+    monkeypatch.setattr(sources.checkin_client, "configured", lambda: True)
+    monkeypatch.setattr(sources.checkin_client, "results", results)
+    events = [{"id": f"g{i}"} for i in range(6)] + [{"id": "nf"}, {"id": "gb"}]
+    store = {f"g{i}": {"checkin": {"formId": f"f{i}"}} for i in range(6)} | {"gb": {"checkin": {"formId": "bad"}}}
+    snap = sources.Snapshot(events=events, store=store)
+    await sources._checkins(events, store, snap)
+    assert peak == sources.CHECKIN_CONCURRENCY
+    assert snap.checkins["g5"] == {"total": 5} and "nf" not in snap.checkins
+    assert snap.checkins["gb"] == {"error": "script down"}

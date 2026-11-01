@@ -32,6 +32,7 @@ WINDOW_AHEAD_DAYS = 60
 SLIDES_WINDOW_DAYS = 10    # a repo created this soon after an event may hold its slides
 CACHE_SECONDS = 600
 VTOOLS_CONCURRENCY = 4
+CHECKIN_CONCURRENCY = 4   # each Apps Script call takes ~1.5 s, so don't wait on them one at a time
 
 
 @dataclass
@@ -258,13 +259,17 @@ async def _slides(session, events, store, snap):
     snap.slides = match_slides(events, await fetch_repos(session), store)
 
 async def _checkins(events, store, snap):
-    for e in events:
-        form = store.get(e['id'], {}).get('checkin')
-        if form and checkin_client.configured():
+    if not checkin_client.configured():
+        return
+    gate = asyncio.Semaphore(CHECKIN_CONCURRENCY)
+    async def one(gid, form_id):
+        async with gate:
             try:
-                snap.checkins[e['id']] = await checkin_client.results(form['formId'])
+                snap.checkins[gid] = await checkin_client.results(form_id)
             except Exception as err:
-                snap.checkins[e['id']] = {"error": str(err)}
+                snap.checkins[gid] = {"error": str(err)}
+    forms = [(e['id'], store.get(e['id'], {}).get('checkin')) for e in events]
+    await asyncio.gather(*(one(gid, form['formId']) for gid, form in forms if form))
 
 async def gather(discord_ids=None, reminders_sent=None):
     """Build a fresh Snapshot. A source that fails is noted, not fatal."""
