@@ -38,6 +38,12 @@ def test_vtools_copy_has_required_fields():
         assert field in text
     assert "Engineering II" in text and "Room Number:** 205" in text
 
+def test_knightconnect_copy_has_form_choices():
+    text = t.copy_block(make_event(), "knightconnect")
+    assert "**Theme:** Learning" in text and "Show To:** The Public" in text and "RSO Event - KnightConnect Points" in text
+    assert "**Theme:** Group Business" in t.copy_block(make_event(name="Fall GBM #3"), "knightconnect")
+    assert "**Theme:** Social" in t.copy_block(make_event(name="Board Game Night Social"), "knightconnect")
+
 def test_category_follows_event_kind():
     assert "Nontechnical" in t.copy_block(make_event(name="Board Game Night Social"), "vtools")
     assert "Professional" in t.copy_block(make_event(name="LinkedIn Career Night"), "vtools")

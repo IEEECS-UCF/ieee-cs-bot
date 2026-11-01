@@ -72,6 +72,13 @@ def kind(event):
     name = event['name'].casefold()
     return next((key for key, words in ROLE_WORDS if any(w in name for w in words)), None)
 
+def knightconnect_theme(event):
+    """The Create Event form's Theme: GBMs are Group Business, socials Social, everything else Learning."""
+    name = event['name'].casefold()
+    if 'gbm' in name or 'general body' in name:
+        return 'Group Business'
+    return 'Social' if kind(event) == 'socials' else 'Learning'
+
 def copy_block(event, platform):
     """Fields laid out in the order the KnightConnect / vTools forms ask for them."""
     description = plain_description(event) or "(no description in the calendar yet)"
@@ -84,6 +91,11 @@ def copy_block(event, platform):
         f"**Description:**\n```\n{description[:1500]}\n```",
     ]
     if platform == "knightconnect":
+        # The other required choices on the Create Event form, as past chapter listings set them
+        lines.insert(1, f"**Theme:** {knightconnect_theme(event)} (suggested)")
+        lines += ["**Show To:** The Public",
+                  "**Event Categories:** RSO Event - KnightConnect Points",
+                  "**Perks:** Free Food / Free Stuff / Credit if any apply"]
         lines.append(f"**Flyer:** {event.get('flyer') or 'none in the calendar (add a Flyer: line there)'}")
         lines.append(f"Create it here: {KNIGHTCONNECT_EVENTS} (Create Event)")
         return "\n".join(lines)
