@@ -528,14 +528,19 @@ class CalendarSync(commands.Cog):
                     if resp.status != 200 or not kind.startswith('image/'):
                         print(f"Flyer link isn't a downloadable image ({resp.status}, {kind or 'no type'}): {url}")
                         return None
-                    data = await resp.content.read(FLYER_MAX_BYTES + 1)
+                    # One read() only returns what has arrived so far, so keep reading to the end
+                    data = bytearray()
+                    async for chunk in resp.content.iter_chunked(64 * 1024):
+                        data += chunk
+                        if len(data) > FLYER_MAX_BYTES:
+                            break
         except Exception as e:
             print(f"Couldn't download flyer {url}: {e}")
             return None
         if len(data) > FLYER_MAX_BYTES:
             print(f"Flyer too large (over {FLYER_MAX_BYTES // 1024 // 1024} MB): {url}")
             return None
-        return data
+        return bytes(data)
 
     async def confirm_deleted(self, guild, discord_id):
         """True only if Discord says the event is gone (or cancelled), not on an error."""

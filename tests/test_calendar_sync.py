@@ -189,3 +189,28 @@ def test_each_thread_gets_its_own_calendar_service(monkeypatch, tmp_path):
     t.start(); t.join()
     assert gcal_client.get_calendar_service() is here
     assert other[0] is not here
+
+async def flyer_server(image):
+    from aiohttp import web
+    from aiohttp.test_utils import TestServer
+    async def handler(request):
+        resp = web.StreamResponse(headers={"Content-Type": "image/png"})
+        await resp.prepare(request)
+        for i in range(0, len(image), 4096):   # small pieces, like a slow download
+            await resp.write(image[i:i + 4096])
+        return resp
+    app = web.Application()
+    app.router.add_get("/flyer.png", handler)
+    return TestServer(app)
+
+async def test_flyer_download_reads_the_whole_image():
+    image = b"\x89PNG" + bytes(range(256)) * 4000
+    cog = object.__new__(cs.CalendarSync)
+    async with await flyer_server(image) as server:
+        assert await cog.download_flyer(str(server.make_url("/flyer.png"))) == image
+
+async def test_flyer_over_the_limit_is_skipped(monkeypatch):
+    monkeypatch.setattr(cs, "FLYER_MAX_BYTES", 10_000)
+    cog = object.__new__(cs.CalendarSync)
+    async with await flyer_server(b"x" * 50_000) as server:
+        assert await cog.download_flyer(str(server.make_url("/flyer.png"))) is None
