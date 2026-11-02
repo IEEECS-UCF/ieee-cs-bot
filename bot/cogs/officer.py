@@ -219,22 +219,51 @@ class Officer(commands.Cog):
     async def post_tabling_tasks(self, user_id):
         if self.volunteer_channel() is None or not TABLING_SHEET_ID:
             return "Needs VOLUNTEER_CHANNEL_ID and TABLING_SHEET_ID set."
-        existing = {t.get("key") for t in volunteer.load_tasks().values()}
+        existing = volunteer.load_tasks()
         today = datetime.datetime.now(TZ).date()
         posted = []
         for x in await self.tabling_sessions():
             key = f"tabling|{x['key']}"   # board_signups finds the task by this key
             filled = x["names"]
-            if not 0 <= (x["date"] - today).days <= TABLING_TASK_DAYS or len(filled) >= 2 or key in existing:
+            if not 0 <= (x["date"] - today).days <= TABLING_TASK_DAYS or len(filled) >= 2:
+                continue
+            earlier = [t for t in existing.values() if t.get("key") == key]
+            if earlier and not await self.posts_deleted(earlier):
                 continue
             task = volunteer.new_task(
                 f"Table: {x['event']} ({x['date']:%a %b %-d})", f"{x['time']} · {x['location']}",
                 (x["notes"] + ("\nAlready signed up on the sheet: " + ", ".join(filled) if filled else "")).strip()
                 + "\nAlso add your name to the Tabling Signup sheet.",
                 2 - len(filled), user_id, key=key)
+            if earlier:
+                # The old post was deleted, so this one replaces it and keeps anyone who had claimed it
+                task["claimed"] = list(dict.fromkeys(u for t in earlier for u in t["claimed"]))
+                stored = volunteer.load_tasks()
+                for t in earlier:
+                    stored.pop(t["id"], None)
+                volunteer.save_tasks(stored)
             message = await self.post_task(task)
             posted.append(f"{task['title']}: {message.jump_url}")
         return posted
+
+    async def posts_deleted(self, tasks_):
+        """True when these tasks are all still open but their board messages were deleted."""
+        for task in tasks_:
+            if not task["open"] or not await self.message_gone(task):
+                return False
+        return True
+
+    async def message_gone(self, task):
+        channel = self.bot.get_channel(task["channel_id"]) if task.get("channel_id") else None
+        if channel is None:
+            return True
+        try:
+            await channel.fetch_message(task["message_id"])
+        except discord.NotFound:
+            return True
+        except discord.HTTPException:
+            return False   # can't tell right now, so leave it posted
+        return False
 
     async def tabling_sessions(self):
         async with aiohttp.ClientSession() as session:

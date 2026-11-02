@@ -171,3 +171,56 @@ def test_chapter_view_shows_why_the_sheet_failed():
     from bot.officer import render
     embeds = render.chapter_embeds(None, {}, datetime.date(2026, 11, 2), tabling_error="Google returned HTTP 404.")
     assert "Couldn't read the tabling sheet: Google returned HTTP 404." in embeds[1].description
+
+
+# ---------- posting open shifts to the volunteer board ----------
+
+class Board:
+    """The volunteer channel: some message IDs are still there, the rest were deleted."""
+    id = 70
+    def __init__(self, live=()):
+        self.live, self.sent = set(live), []
+    async def fetch_message(self, message_id):
+        if message_id not in self.live:
+            raise officer_cog.discord.NotFound(types.SimpleNamespace(status=404, reason="Not Found"), "gone")
+    async def send(self, embed=None, view=None, allowed_mentions=None):
+        self.sent.append(embed.title)
+        return types.SimpleNamespace(id=900 + len(self.sent), jump_url=f"link{len(self.sent)}")
+
+def board_cog(monkeypatch, board):
+    cog = officer_cog.Officer.__new__(officer_cog.Officer)
+    cog.bot = types.SimpleNamespace(get_channel=lambda cid: board)
+    monkeypatch.setenv("VOLUNTEER_CHANNEL_ID", "70")
+    monkeypatch.setattr(officer_cog, "TABLING_SHEET_ID", "sheet")
+    async def fake_fetch(session):
+        return rows()
+    monkeypatch.setattr(officer_cog, "fetch_tabling", fake_fetch)
+    class Clock(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.datetime(2026, 11, 5, 12, 30, tzinfo=TZ)
+    monkeypatch.setattr(officer_cog.datetime, "datetime", Clock)
+    return cog
+
+def stored_task(day, message_id, open_=True, claimed=()):
+    task = volunteer.new_task("Table", "", "", 2, 9, key=f"tabling|2026-11-{day}|3:00 PM - 5:00 PM")
+    task.update(channel_id=70, message_id=message_id, open=open_, claimed=list(claimed))
+    return task
+
+async def test_shift_whose_post_was_deleted_is_posted_again(monkeypatch):
+    gone, live = stored_task("06", 801, claimed=[5]), stored_task("13", 802)
+    volunteer.save_tasks({gone["id"]: gone, live["id"]: live})
+    board = Board(live={802})
+    posted = await board_cog(monkeypatch, board).post_tabling_tasks(9)
+    assert board.sent == ["🙋 Table: Transfer Resource Fair (Fri Nov 6)"] and len(posted) == 1
+    tasks_ = volunteer.load_tasks()
+    assert gone["id"] not in tasks_ and live["id"] in tasks_
+    new = next(t for t in tasks_.values() if t["key"] == gone["key"])
+    assert new["claimed"] == [5] and new["message_id"] == 901
+
+async def test_closed_shift_stays_closed_even_if_its_post_is_gone(monkeypatch):
+    closed, live = stored_task("06", 801, open_=False), stored_task("13", 802)
+    volunteer.save_tasks({closed["id"]: closed, live["id"]: live})
+    board = Board(live={802})
+    assert await board_cog(monkeypatch, board).post_tabling_tasks(9) == []
+    assert board.sent == []
