@@ -155,3 +155,9 @@ def test_recap_not_tracked_before_launch(monkeypatch):
 def test_guide_to_counts_as_workshop():
     from bot.utils import event_text
     assert event_text.kind(event(name="The Beginners Guide to Linux")) == "workshops"
+
+def test_projects_skip_knightconnect_only():
+    meeting = event(name="EMG Prosthetic Arm Project Meeting", days=10)
+    s = by_key(st.event_steps(meeting, snapshot([meeting]), NOW))
+    assert s["knightconnect"].state == st.SKIP
+    assert s["vtools"].state != st.SKIP and s["announcement"].state != st.SKIP

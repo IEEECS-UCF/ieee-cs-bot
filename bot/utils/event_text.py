@@ -72,6 +72,10 @@ def kind(event):
     name = event['name'].casefold()
     return next((key for key, words in ROLE_WORDS if any(w in name for w in words)), None)
 
+def is_project(event):
+    """Project meetings stay off Discord's event list and KnightConnect; everything else still covers them."""
+    return 'project' in event['name'].casefold()
+
 def knightconnect_theme(event):
     """The Create Event form's Theme: GBMs are Group Business, socials Social, everything else Learning."""
     name = event['name'].casefold()

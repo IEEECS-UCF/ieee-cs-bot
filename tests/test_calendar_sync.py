@@ -173,6 +173,17 @@ async def test_read_only_recreates_deleted_discord_event():
     assert done("discord.create") and not any(c[0].startswith("gcal") for c in CALLS)
 
 
+async def test_projects_stay_off_discord():
+    ITEMS["P"] = item("P", "EEG Project Meeting"); g = Guild([]); cog = new_cog(True); await sync(cog, g)
+    assert not done("discord.create") and "P" not in cog.state["event_map"]
+
+async def test_linked_project_loses_its_discord_copy_only():
+    d, g = linked_pair(); cog = new_cog(True); await sync(cog, g)
+    ITEMS["A"]["summary"] = "EMG Project Meeting"; CALLS.clear(); await sync(cog, g)
+    assert ("discord.delete", "Bash Scripting Workshop") in CALLS and not any(c[0].startswith("gcal") for c in CALLS)
+    CALLS.clear(); await sync(cog, g)
+    assert not CALLS and "A" in ITEMS
+
 def test_each_thread_gets_its_own_calendar_service(monkeypatch, tmp_path):
     """httplib2 connections break when two threads share one, so the service is per thread."""
     import threading

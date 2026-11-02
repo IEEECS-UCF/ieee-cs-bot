@@ -148,8 +148,9 @@ def listing_step(key, label, e, match, today, start, start_key, title_key, locat
     return Step(key, "Promote", label, DONE, f"listed{linked} · <{match['link']}>", actions)
 
 def promote_steps(e, record, marks, snap, today, start):
+    kc_match = SKIPPED if event_text.is_project(e) else snap.knightconnect.get(e['id'])
     steps = [
-        listing_step("knightconnect", "KnightConnect", e, snap.knightconnect.get(e['id']), today, start,
+        listing_step("knightconnect", "KnightConnect", e, kc_match, today, start,
                      'startsOn', 'name', lambda m: m.get('location')),
         listing_step("vtools", "vTools", e, snap.vtools.get(e['id']), today, start,
                      'start-time', 'title', vtools_location),

@@ -14,6 +14,7 @@ from bot.utils.gcal_client import (fetch_upcoming_events, get_event, insert_even
                                    delete_event as delete_gcal_event)
 from bot.utils.formatting import create_base_embed, format_timestamp, IEEE_GOLD
 from bot.utils.alerts import alert, Streak
+from bot.utils.event_text import is_project
 
 ORG_NAME = "IEEE CS"
 STATE_FILE = "data/state.json"
@@ -298,6 +299,16 @@ class CalendarSync(commands.Cog):
                     print(f"Deleted calendar event '{payload['name']}' (deleted in Discord)")
                 except Exception as e:
                     print(f"Failed to delete calendar event '{payload['name']}': {e}")
+                continue
+
+            if is_project(payload):
+                # Project meetings stay on the calendar and the weekly summary, not Discord's
+                # event list; unlinking leaves any old Discord copy to the cleanup below
+                linked = event_map.pop(gid, None)
+                if linked:
+                    claimed.discard(linked)
+                    snapshots.pop(gid, None)
+                    self.save_state()
                 continue
 
             event = discord_events.get(event_map.get(gid))
