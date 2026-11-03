@@ -4,7 +4,7 @@ import asyncio
 import discord
 from discord.ext import commands, tasks
 
-from bot.assistant import documents
+from bot.assistant import drive, notion
 from bot.assistant.agent import Ask
 from bot.assistant.knowledge import Knowledge
 from bot.utils import ai_draft
@@ -14,7 +14,7 @@ from bot.utils.alerts import alert
 # itself lives in the Officer cog's /officer group).
 #   Discord: every readable channel and thread, back-filled once and then kept up
 #            to date from new, edited and deleted messages, plus a catch-up every few hours.
-#   Notion: refreshed every few hours; only changed pages are re-read.
+#   Drive and Notion: refreshed every few hours; only changed documents are re-read.
 # Replies are public, so /officer ask only runs in channels members can't see.
 
 CATCH_UP_HOURS = 6
@@ -137,22 +137,27 @@ class Assistant(commands.Cog):
         if payload.guild_id == self.guild_id:
             await asyncio.to_thread(self.knowledge.remove, f"discord:{payload.message_id}")
 
-    # ---------- Notion ----------
+    # ---------- Drive and Notion ----------
 
     @tasks.loop(hours=DOCS_HOURS)
     async def refresh_documents(self):
-        try:
-            await self.refresh_notion()
-        except Exception as e:
-            print(f"Knowledge cache: couldn't refresh Notion: {e}")
+        for name, refresh in (("Drive", self.refresh_drive), ("Notion", self.refresh_notion)):
+            try:
+                await refresh()
+            except Exception as e:
+                print(f"Knowledge cache: couldn't refresh {name}: {e}")
 
     @refresh_documents.before_loop
     async def before_documents(self):
         await self.bot.wait_until_ready()
 
+    async def refresh_drive(self):
+        if drive.configured():
+            await self.refresh("drive", lambda seen: asyncio.to_thread(drive.changed_documents, seen))
+
     async def refresh_notion(self):
-        if documents.notion_configured():
-            await self.refresh("notion", documents.notion_pages)
+        if notion.configured():
+            await self.refresh("notion", notion.changed_pages)
 
     async def refresh(self, source, fetch):
         """Re-read changed documents and drop ones no longer shared."""
@@ -181,7 +186,7 @@ class Assistant(commands.Cog):
                 "and it can include officer-only information.", ephemeral=True)
             return
         await interaction.response.defer(thinking=True)
-        run = Ask(self.bot, interaction.guild, interaction.user, self.knowledge)
+        run = Ask(self.bot, interaction.guild, interaction.user, self.knowledge, interaction.channel)
         answer = await run.run(question)
         u = run.usage
         print(f"/officer ask by {interaction.user} ({interaction.user.id}): {u['input']} new + {u['cached']} cached + "
