@@ -84,7 +84,7 @@ async def test_only_officers_can_use_officer_commands(roles, allowed, monkeypatc
     monkeypatch.setattr(cog, "cog_load", lambda: _noop())
     await bot.add_cog(cog)
     cmds = [c for c in bot.tree.walk_commands() if isinstance(c, discord.app_commands.Command)]
-    assert sorted(c.qualified_name for c in cmds) == ["officer announce", "officer chapter", "officer event", "officer events"]
+    assert sorted(c.qualified_name for c in cmds) == ["officer announce", "officer ask", "officer chapter", "officer event", "officer events"]
     for command in cmds:
         interaction = interaction_with(roles)
         assert await command._check_can_run(interaction) is allowed

@@ -15,7 +15,7 @@ from bot.utils.formatting import create_base_embed, IEEE_BLUE, IEEE_GOLD
 from bot.cogs import volunteer, event_reminders
 from bot.officer.data import EventStore, SKIPPED, add_deadline, remove_deadline, load_deadlines, deadline_key
 from bot.officer.sources import TZ, fetch_repos, fetch_tabling, to_event, TABLING_SHEET_ID, WINDOW_AHEAD_DAYS
-from bot.officer.steps import event_steps, owner_of, booked_room, clashes, PROBLEMS
+from bot.officer.steps import event_steps, owner_of, booked_room, clashes, no_room, PROBLEMS
 from bot.officer import render, new_event, tabling, review
 from bot.officer.review import mentions_in
 
@@ -341,7 +341,7 @@ class RoomModal(discord.ui.Modal):
         store.set_room(self.card.gid, self.status, room, interaction.user.id, self.note.value)
         lines = [f"Room {self.status}: **{room}**."]
         event = self.card.cog.cache.with_store().event(self.card.gid)
-        if self.status == "confirmed" and event and not same_place(room, event['location'] or ''):
+        if self.status == "confirmed" and event and (no_room(event['location']) or not same_place(room, event['location'])):
             try:
                 await asyncio.to_thread(patch_event, os.getenv('GOOGLE_CALENDAR_ID'), self.card.gid, {'location': room})
                 event['location'] = room

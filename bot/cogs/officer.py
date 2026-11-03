@@ -22,6 +22,7 @@ from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton
 #   /officer events   the board: every active event, one line each, and New event
 #   /officer event    one event's card, with a menu that fixes each step
 #   /officer chapter  deadlines, tabling, volunteer tasks, members, monthly report
+#   /officer ask      questions and event changes, answered by Claude (bot/cogs/assistant.py)
 # The digest (DIGEST_DAYS) and the event posts (status + daily pings) are drawn from the same steps.
 # Last month's report posts on the 1st (METRICS_CHANNEL_ID).
 
@@ -164,6 +165,15 @@ class Officer(commands.Cog):
     @app_commands.autocomplete(event=event_autocomplete)
     async def event_cmd(self, interaction: discord.Interaction, event: str):
         await open_card(self, interaction, event)
+
+    @officer.command(name="ask", description="Ask about the chapter, or have the assistant line up changes to events.")
+    @app_commands.describe(question="What you want to know, or what to change")
+    async def ask_cmd(self, interaction: discord.Interaction, question: app_commands.Range[str, 1, 1000]):
+        assistant = self.bot.get_cog("Assistant")
+        if assistant is None:
+            await interaction.response.send_message("The assistant isn't loaded.", ephemeral=True)
+            return
+        await assistant.ask(interaction, question)
 
     @officer.command(name="announce", description="Write an #announcements post. Another officer approves it before it posts.")
     @app_commands.describe(image="An image to post with it (optional)")
