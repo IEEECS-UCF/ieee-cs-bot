@@ -135,6 +135,20 @@ func (b *Bot) Command(cmd *discordgo.ApplicationCommand, handlers map[string]Com
 	}
 }
 
+// Commands is what Open will sync.
+func (b *Bot) Commands() []*discordgo.ApplicationCommand {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]*discordgo.ApplicationCommand(nil), b.commands...)
+}
+
+// HasHandler reports whether a qualified command name has a handler.
+func (b *Bot) HasHandler(name string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.handlers[name] != nil
+}
+
 // Autocomplete registers the autocomplete for a command's options.
 func (b *Bot) Autocomplete(name string, f AutocompleteFunc) {
 	b.mu.Lock()
