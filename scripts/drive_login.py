@@ -11,6 +11,7 @@ client_secret.json is the "Desktop app" OAuth client downloaded from the bot's
 Google Cloud project (APIs & Services → Credentials).
 """
 import sys
+from contextlib import redirect_stdout
 
 from google_auth_oauthlib.flow import InstalledAppFlow
 
@@ -19,6 +20,8 @@ SCOPES = ["https://www.googleapis.com/auth/drive"]
 if len(sys.argv) != 2:
     sys.exit(__doc__)
 print("A browser window will open. Sign in as ieeecsucf@gmail.com and approve.", file=sys.stderr)
-creds = InstalledAppFlow.from_client_secrets_file(sys.argv[1], SCOPES).run_local_server(port=0, prompt="consent")
+# The sign-in library prints its own prompts to stdout; keep stdout for the login alone
+with redirect_stdout(sys.stderr):
+    creds = InstalledAppFlow.from_client_secrets_file(sys.argv[1], SCOPES).run_local_server(port=0, prompt="consent")
 print(creds.to_json())
 print("Done. The login went to stdout (the pipe), not the screen.", file=sys.stderr)
