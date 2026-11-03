@@ -22,11 +22,33 @@ jobs:
       - name: Import check
         run: uv run --locked python -c "import bot.main, bot.cogs.calendar_sync, bot.cogs.general, bot.cogs.job_feed, bot.utils.job_worker"
 
+  # The bot that runs is the Go one (cmd/, internal/). The Python bot above is
+  # kept checked and its code kept current on the server, so reverting is quick.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go vet ./... && go test -race ./...
+      - name: Build the Linux binary
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o ieee-bot ./cmd/ieee-bot
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ieee-bot
+          path: ieee-bot
+          retention-days: 7
+
   deploy:
-    needs: check
+    needs: [check, build]
     runs-on: ubuntu-latest
     environment: production
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ieee-bot
       - name: Deploy to server
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -37,4 +59,6 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o ConnectTimeout=20 ubuntu@"$HOST" deploy
+          # The server's deploy.sh installs the binary sent on stdin (and puts the
+          # previous one back if the new one doesn't log in)
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o ConnectTimeout=20 ubuntu@"$HOST" deploy < ieee-bot

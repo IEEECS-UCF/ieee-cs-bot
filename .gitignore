@@ -15,3 +15,6 @@ data/
 cache/
 venv-py310/
 .venv/
+
+# Go build output
+/ieee-bot-go

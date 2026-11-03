@@ -1,0 +1,388 @@
+{
+ "classify": {
+  "Austin, TX": "us",
+  "US-FL-Largo": "us",
+  "US, CA, Santa Clara": "us",
+  "Toronto, ON": "ca",
+  "CA-ON-Ottawa": "ca",
+  "Remote": null,
+  "London, UK": "foreign",
+  "Kraków": "foreign",
+  "KRAKÓW": "foreign",
+  "São Paulo": "foreign",
+  "SÃO PAULO": "foreign",
+  "Zürich": null,
+  "Montréal, QC": "ca",
+  "texas": "us",
+  "us remote": "us",
+  "Bengaluru": "foreign",
+  "Parisé": null,
+  "éLondon": null,
+  "Austin, TX": "us",
+  "austin, tx": null,
+  "USA": "us",
+  "U.S.": null,
+  "3 Locations": null,
+  "KNV I": null,
+  "Czechia": "foreign",
+  "Brno, Czeché": "foreign",
+  "Ontario": "ca",
+  "Mexico City": "foreign",
+  "New Mexico": "us",
+  "Cambridge, UK": "foreign",
+  "Cambridge, MA": "us",
+  "Paris, TX": "us",
+  "Washington, DC": "us",
+  "Seoul, Korea": "foreign",
+  "Dublin, CA": "us",
+  "Ⅳ Paris": "foreign",
+  "Paris²": null,
+  "Paris_x": null,
+  "Korea": "foreign",
+  "ⅰndia": null
+ },
+ "terms": {
+  "Software Engineer Intern - Summer 2027": [
+   "Summer 2027"
+  ],
+  "2026 Fall Co-op / Spring 2027": [
+   "Fall 2026",
+   "Spring 2027"
+  ],
+  "Summer/Fall Intern": [
+   "Summer",
+   "Fall"
+  ],
+  "SUMMER 2027 Intern": [
+   "Summer 2027"
+  ],
+  "Firmware Engineer I": [],
+  "Firmware Engineer I": [],
+  "Senior GPU Engineer": [],
+  "Associate Firmware Engineer": [],
+  "CPU Design Verification Intern": [],
+  "Quantitative Trading Intern, C++": [],
+  "Kernel Engineer, New Grad 2026": [],
+  "Linux Driver Developer": [],
+  "Display Driver Engineer Co-op": [],
+  "Rust Développeur": [],
+  "Développeur embedded": [],
+  "embeddedé": [],
+  "Ingénieur Firmware Stagiaire": [],
+  "Compiler Engineering Internship (Fall 2026)": [
+   "Fall 2026"
+  ],
+  "GPU Compute Intern – Winter 2027": [
+   "Winter 2027"
+  ],
+  "Student Researcher, HPC": [],
+  "Engineer 1, Embedded Software": [],
+  "Rotational Development Program - Hardware": [],
+  "Technician Intern, Firmware": [],
+  "Machine Learning Intern": [],
+  "Sr. Embedded Engineer": [],
+  "ſtudent embedded": [],
+  "Ⅰntern embedded": []
+ },
+ "days": {
+  "Posted Today": 0,
+  "Posted Yesterday": 1,
+  "Posted 30+ Days Ago": 31,
+  "posted 5 days ago": 5,
+  "Posted 1 Day Ago": 1,
+  "": 1000000,
+  "New": 1000000
+ },
+ "season_split_input": [
+  {
+   "id": "x",
+   "active": true,
+   "date_posted": 5,
+   "season": "Summer / Fall",
+   "url": "u",
+   "title": "T",
+   "company_name": "C"
+  },
+  {
+   "id": 7,
+   "active": 1,
+   "date_posted": 5,
+   "terms": [
+    "N/A",
+    "Spring 2027"
+   ],
+   "url": "u2",
+   "is_visible": false
+  },
+  {
+   "id": 8,
+   "active": true,
+   "date_posted": 5,
+   "terms": [],
+   "season": "Summer",
+   "url": "u3",
+   "locations": [
+    "A"
+   ]
+  },
+  {
+   "id": 9,
+   "active": true,
+   "date_posted": 1,
+   "url": "u4"
+  }
+ ],
+ "season_split": [
+  {
+   "track": "Internship",
+   "logo_fallback": null,
+   "terms": [
+    "Summer",
+    "Fall"
+   ],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "id": "x",
+   "source": "S",
+   "title": "T",
+   "company": "C",
+   "company_url": null,
+   "url": "u",
+   "locations": [],
+   "date_posted": 5
+  },
+  {
+   "track": "Internship",
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "id": "8",
+   "source": "S",
+   "title": "",
+   "company": "",
+   "company_url": null,
+   "url": "u3",
+   "locations": [
+    "A"
+   ],
+   "date_posted": 5
+  }
+ ],
+ "boards_input": {
+  "greenhouse": {
+   "meta": {
+    "total": 2
+   },
+   "jobs": [
+    {
+     "id": 4012345006,
+     "title": "Firmware Intern",
+     "absolute_url": "https://g/1",
+     "location": {
+      "name": "Hawthorne, CA; Remote | Austin, TX"
+     },
+     "first_published": "2026-10-20T10:00:00-04:00",
+     "updated_at": "2026-10-21T10:00:00-04:00"
+    },
+    {
+     "id": 2,
+     "title": "Old",
+     "absolute_url": "https://g/2",
+     "location": null,
+     "updated_at": "2020-01-01T00:00:00Z"
+    }
+   ]
+  },
+  "lever": [
+   {
+    "id": "abc",
+    "text": "Embedded Intern Summer 2027",
+    "hostedUrl": "https://l/1",
+    "categories": {
+     "location": "Foster City, CA",
+     "allLocations": []
+    },
+    "workplaceType": "remote",
+    "createdAt": 1792000000123
+   },
+   {
+    "id": "def",
+    "text": "x",
+    "hostedUrl": "https://l/2",
+    "categories": {
+     "allLocations": [
+      "Remote",
+      "Seattle, WA"
+     ]
+    },
+    "workplaceType": "remote",
+    "createdAt": 1792000000999
+   }
+  ],
+  "ashby": {
+   "apiVersion": "1",
+   "jobs": [
+    {
+     "id": "u1",
+     "title": "Compiler Intern",
+     "jobUrl": "https://a/1",
+     "location": "Sunnyvale, CA",
+     "secondaryLocations": [
+      {
+       "location": "Toronto, ON"
+      },
+      {
+       "location": null
+      }
+     ],
+     "isRemote": true,
+     "publishedAt": "2026-10-20T15:53:41.397+00:00"
+    },
+    {
+     "id": "u2",
+     "title": "Hidden",
+     "jobUrl": "https://a/2",
+     "isListed": false,
+     "publishedAt": "2026-10-20T15:53:41.397+00:00"
+    }
+   ]
+  }
+ },
+ "boards": {
+  "greenhouse": [
+   {
+    "track": null,
+    "logo_fallback": "https://www.google.com/s2/favicons?domain=co.com&sz=128",
+    "terms": [],
+    "sponsorship": null,
+    "degrees": [],
+    "countries": null,
+    "active": true,
+    "id": "greenhouse:slug:4012345006",
+    "source": "Co Name",
+    "title": "Firmware Intern",
+    "company": "Co Name",
+    "company_url": "https://simplify.jobs/c/Co-Name",
+    "url": "https://g/1",
+    "locations": [
+     "Hawthorne, CA",
+     "Remote",
+     "Austin, TX"
+    ],
+    "date_posted": 1792504800
+   }
+  ],
+  "lever": [
+   {
+    "track": null,
+    "logo_fallback": "https://www.google.com/s2/favicons?domain=co.com&sz=128",
+    "terms": [
+     "Summer 2027"
+    ],
+    "sponsorship": null,
+    "degrees": [],
+    "countries": null,
+    "active": true,
+    "id": "lever:slug:abc",
+    "source": "Co Name",
+    "title": "Embedded Intern Summer 2027",
+    "company": "Co Name",
+    "company_url": "https://simplify.jobs/c/Co-Name",
+    "url": "https://l/1",
+    "locations": [
+     "Foster City, CA",
+     "Remote"
+    ],
+    "date_posted": 1792000000
+   },
+   {
+    "track": null,
+    "logo_fallback": "https://www.google.com/s2/favicons?domain=co.com&sz=128",
+    "terms": [],
+    "sponsorship": null,
+    "degrees": [],
+    "countries": null,
+    "active": true,
+    "id": "lever:slug:def",
+    "source": "Co Name",
+    "title": "x",
+    "company": "Co Name",
+    "company_url": "https://simplify.jobs/c/Co-Name",
+    "url": "https://l/2",
+    "locations": [
+     "Remote",
+     "Seattle, WA"
+    ],
+    "date_posted": 1792000000
+   }
+  ],
+  "ashby": [
+   {
+    "track": null,
+    "logo_fallback": "https://www.google.com/s2/favicons?domain=co.com&sz=128",
+    "terms": [],
+    "sponsorship": null,
+    "degrees": [],
+    "countries": null,
+    "active": true,
+    "id": "ashby:slug:u1",
+    "source": "Co Name",
+    "title": "Compiler Intern",
+    "company": "Co Name",
+    "company_url": "https://simplify.jobs/c/Co-Name",
+    "url": "https://a/1",
+    "locations": [
+     "Sunnyvale, CA",
+     "Toronto, ON",
+     "Remote"
+    ],
+    "date_posted": 1792511621
+   }
+  ]
+ },
+ "facets_input": [
+  {
+   "facetParameter": "workerSubType",
+   "values": [
+    {
+     "id": "s1",
+     "descriptor": "Intern (Fixed Term)"
+    },
+    {
+     "id": "s2",
+     "descriptor": "Regular"
+    },
+    {
+     "descriptor": "College Grad"
+    }
+   ]
+  },
+  {
+   "facetParameter": "jobFamilyGroup",
+   "values": [
+    {
+     "id": "j1",
+     "descriptor": "Engineering"
+    },
+    {
+     "id": "j2",
+     "descriptor": "Sales"
+    }
+   ]
+  }
+ ],
+ "facets": [
+  [
+   "s1"
+  ],
+  [
+   "j1"
+  ],
+  null
+ ]
+}

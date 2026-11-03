@@ -1,0 +1,594 @@
+{
+ "topics": {
+  "Software Engineer Intern - Summer 2027": [],
+  "2026 Fall Co-op / Spring 2027": [],
+  "Summer/Fall Intern": [],
+  "SUMMER 2027 Intern": [],
+  "Firmware Engineer I": [
+   "Embedded Systems"
+  ],
+  "Firmware Engineer I": [
+   "Embedded Systems"
+  ],
+  "Senior GPU Engineer": [
+   "GPU Programming"
+  ],
+  "Associate Firmware Engineer": [
+   "Embedded Systems"
+  ],
+  "CPU Design Verification Intern": [
+   "Comp Arch"
+  ],
+  "Quantitative Trading Intern, C++": [],
+  "Kernel Engineer, New Grad 2026": [
+   "OS"
+  ],
+  "Linux Driver Developer": [
+   "OS",
+   "Drivers"
+  ],
+  "Display Driver Engineer Co-op": [
+   "Drivers"
+  ],
+  "Rust Développeur": [
+   "Systems Programming"
+  ],
+  "Développeur embedded": [
+   "Embedded Systems"
+  ],
+  "embeddedé": [],
+  "Ingénieur Firmware Stagiaire": [
+   "Embedded Systems"
+  ],
+  "Compiler Engineering Internship (Fall 2026)": [
+   "Systems Programming"
+  ],
+  "GPU Compute Intern – Winter 2027": [
+   "GPU Programming"
+  ],
+  "Student Researcher, HPC": [
+   "Computation"
+  ],
+  "Engineer 1, Embedded Software": [
+   "Embedded Systems"
+  ],
+  "Rotational Development Program - Hardware": [],
+  "Technician Intern, Firmware": [],
+  "Machine Learning Intern": [],
+  "Sr. Embedded Engineer": [
+   "Embedded Systems"
+  ],
+  "ſtudent embedded": [
+   "Embedded Systems"
+  ],
+  "Ⅰntern embedded": [
+   "Embedded Systems"
+  ]
+ },
+ "track": {
+  "Software Engineer Intern - Summer 2027": "Internship",
+  "2026 Fall Co-op / Spring 2027": "Internship",
+  "Summer/Fall Intern": "Internship",
+  "SUMMER 2027 Intern": "Internship",
+  "Firmware Engineer I": "New Grad",
+  "Firmware Engineer I": "New Grad",
+  "Senior GPU Engineer": null,
+  "Associate Firmware Engineer": "New Grad",
+  "CPU Design Verification Intern": "Internship",
+  "Quantitative Trading Intern, C++": "Internship",
+  "Kernel Engineer, New Grad 2026": "New Grad",
+  "Linux Driver Developer": null,
+  "Display Driver Engineer Co-op": "Internship",
+  "Rust Développeur": null,
+  "Développeur embedded": null,
+  "embeddedé": null,
+  "Ingénieur Firmware Stagiaire": null,
+  "Compiler Engineering Internship (Fall 2026)": "Internship",
+  "GPU Compute Intern – Winter 2027": "Internship",
+  "Student Researcher, HPC": "Internship",
+  "Engineer 1, Embedded Software": "New Grad",
+  "Rotational Development Program - Hardware": "New Grad",
+  "Technician Intern, Firmware": "Internship",
+  "Machine Learning Intern": "Internship",
+  "Sr. Embedded Engineer": null,
+  "ſtudent embedded": "Internship",
+  "Ⅰntern embedded": null
+ },
+ "student": {
+  "Software Engineer Intern - Summer 2027": true,
+  "2026 Fall Co-op / Spring 2027": true,
+  "Summer/Fall Intern": true,
+  "SUMMER 2027 Intern": true,
+  "Firmware Engineer I": true,
+  "Firmware Engineer I": true,
+  "Senior GPU Engineer": false,
+  "Associate Firmware Engineer": true,
+  "CPU Design Verification Intern": true,
+  "Quantitative Trading Intern, C++": true,
+  "Kernel Engineer, New Grad 2026": true,
+  "Linux Driver Developer": false,
+  "Display Driver Engineer Co-op": true,
+  "Rust Développeur": false,
+  "Développeur embedded": false,
+  "embeddedé": false,
+  "Ingénieur Firmware Stagiaire": false,
+  "Compiler Engineering Internship (Fall 2026)": true,
+  "GPU Compute Intern – Winter 2027": true,
+  "Student Researcher, HPC": true,
+  "Engineer 1, Embedded Software": true,
+  "Rotational Development Program - Hardware": true,
+  "Technician Intern, Firmware": true,
+  "Machine Learning Intern": true,
+  "Sr. Embedded Engineer": false,
+  "ſtudent embedded": true,
+  "Ⅰntern embedded": false
+ },
+ "keep": {
+  "Software Engineer Intern - Summer 2027": false,
+  "2026 Fall Co-op / Spring 2027": false,
+  "Summer/Fall Intern": false,
+  "SUMMER 2027 Intern": false,
+  "Firmware Engineer I": true,
+  "Firmware Engineer I": true,
+  "Senior GPU Engineer": true,
+  "Associate Firmware Engineer": true,
+  "CPU Design Verification Intern": true,
+  "Quantitative Trading Intern, C++": false,
+  "Kernel Engineer, New Grad 2026": true,
+  "Linux Driver Developer": true,
+  "Display Driver Engineer Co-op": true,
+  "Rust Développeur": true,
+  "Développeur embedded": true,
+  "embeddedé": false,
+  "Ingénieur Firmware Stagiaire": true,
+  "Compiler Engineering Internship (Fall 2026)": true,
+  "GPU Compute Intern – Winter 2027": true,
+  "Student Researcher, HPC": true,
+  "Engineer 1, Embedded Software": true,
+  "Rotational Development Program - Hardware": false,
+  "Technician Intern, Firmware": false,
+  "Machine Learning Intern": false,
+  "Sr. Embedded Engineer": true,
+  "ſtudent embedded": true,
+  "Ⅰntern embedded": true
+ },
+ "dedupe": [
+  "astera labs|engineer intern software",
+  "boeing|embedded engineer intern software",
+  "cboe global markets|2 c# c++ engineer",
+  "i stanbul tech|firmware intern",
+  "nvidia|college engineer grad new software systems"
+ ],
+ "same": [
+  true,
+  true,
+  false,
+  false,
+  false,
+  false
+ ],
+ "urls": {
+  "https://boards.greenhouse.io/spacex/jobs/123?gh_src=abc&t=1&utm_source=x": "https://boards.greenhouse.io/spacex/jobs/123?t=1",
+  " https://Jobs.Lever.co/zoox/abc-123/apply?lever-source=LinkedIn ": "https://jobs.lever.co/zoox/abc-123",
+  "https://nvidia.wd5.myworkdayjobs.com/en-US/NVIDIAExternalCareerSite/job/US-CA-Santa-Clara/GPU-Intern_JR1/apply/": "https://nvidia.wd5.myworkdayjobs.com/nvidiaexternalcareersite/job/us-ca-santa-clara/gpu-intern_jr1",
+  "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/X_JR2": "https://nvidia.wd5.myworkdayjobs.com/nvidiaexternalcareersite/job/x_jr2",
+  "https://intel.wd1.myworkdayjobs.com/en-us": "https://intel.wd1.myworkdayjobs.com/en-us",
+  "https://example.com/careers/job;jsessionid=XYZ?id=5&ref=simplify&Source=a&q=a+b%20c&empty=&flag": "https://example.com/careers/job?id=5&q=a+b+c",
+  "https://example.com/a/application": "https://example.com/a",
+  "https://example.com/apply": "https://example.com",
+  "https://example.com": "https://example.com",
+  "https://example.com/x?q=%zz&r=%E2%82%AC&s=%FF": "https://example.com/x?q=%25zz&r=%E2%82%AC&s=%EF%BF%BD",
+  "https://example.com/x#frag": "https://example.com/x",
+  "example.com/path": "https:example.com/path",
+  "https://EXAMPLE.com/Path/To/Job/": "https://example.com/Path/To/Job",
+  "https://x.com/a;p/b;q?z=1": "https://x.com/a;p/b?z=1"
+ },
+ "locations": [
+  "Not stated",
+  "A",
+  "A, B, C",
+  "A\nB\nC\n+2 more"
+ ],
+ "select_input": [
+  {
+   "track": "Internship",
+   "logo_fallback": null,
+   "terms": [
+    "Summer 2027"
+   ],
+   "sponsorship": "Offers Sponsorship",
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": "https://simplify.jobs/c/Acme",
+   "source": "Simplify",
+   "id": "a1",
+   "title": "Firmware Engineer Intern",
+   "company": "Acme Inc.",
+   "url": "https://acme.com/jobs/1?utm_source=simplify",
+   "locations": [
+    "Orlando, FL"
+   ],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": "https://logo/a",
+   "terms": [
+    "Fall 2027"
+   ],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "vanshb03",
+   "id": "a2",
+   "title": "Firmware Engineer Intern",
+   "company": "Acme",
+   "url": "https://acme.com/jobs/2",
+   "locations": [
+    "Austin, TX",
+    "Orlando, FL"
+   ],
+   "date_posted": 150
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Acme Robotics",
+   "id": "a3",
+   "title": "Firmware Engineering Internship",
+   "company": "Acme Robotics",
+   "url": "https://acme.com/jobs/3/apply",
+   "locations": [
+    "Remote"
+   ],
+   "date_posted": 300
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "b1",
+   "title": "Senior Firmware Engineer",
+   "company": "Beta",
+   "url": "https://beta.com/1",
+   "locations": [
+    "Austin, TX"
+   ],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "c1",
+   "title": "GPU Software Intern",
+   "company": "Gamma",
+   "url": "https://gamma.com/1",
+   "locations": [
+    "London, UK"
+   ],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "c2",
+   "title": "GPU Software Intern",
+   "company": "Gamma",
+   "url": "https://gamma.com/2",
+   "locations": [
+    "London, UK",
+    "Remote"
+   ],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "d1",
+   "title": "Kernel Engineer",
+   "company": "Delta",
+   "url": "https://delta.com/1",
+   "locations": [
+    "Toronto, ON"
+   ],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "d2",
+   "title": "Kernel Engineer, New Grad",
+   "company": "Delta",
+   "url": "https://delta.com/1?ref=x",
+   "locations": [
+    "Ottawa, ON"
+   ],
+   "date_posted": 100
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": [
+    "Germany"
+   ],
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "e1",
+   "title": "Embedded Intern",
+   "company": "Eps",
+   "url": "https://eps.com/1",
+   "locations": [
+    "Somewhere"
+   ],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": [
+    "United States of America"
+   ],
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "e2",
+   "title": "Embedded Intern",
+   "company": "Eps",
+   "url": "https://eps.com/2",
+   "locations": [
+    "KNV I, USA"
+   ],
+   "date_posted": 50
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": false,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "f1",
+   "title": "Rust Intern",
+   "company": "Phi",
+   "url": "https://phi.com/1",
+   "locations": [],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "g1",
+   "title": "Machine Learning Intern",
+   "company": "Gee",
+   "url": "https://gee.com/1",
+   "locations": [],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [
+    "Master's",
+    "PhD"
+   ],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "h1",
+   "title": "Cboe  C++   Intern",
+   "company": "Cboe",
+   "url": "https://cboe.com/1",
+   "locations": [],
+   "date_posted": 200
+  },
+  {
+   "track": null,
+   "logo_fallback": null,
+   "terms": [],
+   "sponsorship": null,
+   "degrees": [],
+   "countries": null,
+   "active": true,
+   "company_url": null,
+   "source": "Simplify",
+   "id": "h2",
+   "title": "Cboe C++ Intern",
+   "company": "Cboe Global Markets",
+   "url": "https://cboe.com/2",
+   "locations": [
+    "Chicago, IL"
+   ],
+   "date_posted": 210
+  }
+ ],
+ "select": [
+  {
+   "keys": [
+    "acme|engineer firmware intern",
+    "acme robotics|engineer firmware intern"
+   ],
+   "ids": [
+    "a1",
+    "a2",
+    "a3"
+   ],
+   "urls": [
+    "https://acme.com/jobs/1",
+    "https://acme.com/jobs/2",
+    "https://acme.com/jobs/3"
+   ],
+   "track": "Internship",
+   "topics": [
+    "Embedded Systems"
+   ],
+   "title": "Firmware Engineer Intern",
+   "company": "Acme Inc.",
+   "locations": [
+    "Orlando, FL",
+    "Austin, TX",
+    "Remote"
+   ],
+   "terms": [
+    "Summer 2027",
+    "Fall 2027"
+   ],
+   "logo_fallback": "https://logo/a",
+   "date_posted": 150,
+   "source": "Simplify"
+  },
+  {
+   "keys": [
+    "gamma|gpu intern software"
+   ],
+   "ids": [
+    "c2"
+   ],
+   "urls": [
+    "https://gamma.com/2"
+   ],
+   "track": "Internship",
+   "topics": [
+    "GPU Programming"
+   ],
+   "title": "GPU Software Intern",
+   "company": "Gamma",
+   "locations": [
+    "Remote"
+   ],
+   "terms": [],
+   "logo_fallback": null,
+   "date_posted": 200,
+   "source": "Simplify"
+  },
+  {
+   "keys": [
+    "delta|engineer grad kernel new"
+   ],
+   "ids": [
+    "d2"
+   ],
+   "urls": [
+    "https://delta.com/1"
+   ],
+   "track": "New Grad",
+   "topics": [
+    "OS"
+   ],
+   "title": "Kernel Engineer, New Grad",
+   "company": "Delta",
+   "locations": [
+    "Ottawa, ON"
+   ],
+   "terms": [],
+   "logo_fallback": null,
+   "date_posted": 100,
+   "source": "Simplify"
+  },
+  {
+   "keys": [
+    "cboe|c++ cboe intern",
+    "cboe global markets|c++ cboe intern"
+   ],
+   "ids": [
+    "h1",
+    "h2"
+   ],
+   "urls": [
+    "https://cboe.com/1",
+    "https://cboe.com/2"
+   ],
+   "track": "Internship",
+   "topics": [
+    "Systems Programming"
+   ],
+   "title": "Cboe C++ Intern",
+   "company": "Cboe",
+   "locations": [
+    "Chicago, IL"
+   ],
+   "terms": [],
+   "logo_fallback": null,
+   "date_posted": 200,
+   "source": "Simplify"
+  }
+ ],
+ "highlights": [
+  [
+   "☀️ Summer",
+   "🍂 Fall",
+   "🌴 Florida",
+   "🌐 Remote",
+   "🛂 Offers visa sponsorship"
+  ],
+  [
+   "🌐 Remote"
+  ],
+  [],
+  [
+   "🎓 Master's/PhD only"
+  ]
+ ]
+}
