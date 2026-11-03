@@ -29,7 +29,7 @@ changes `.github/workflows/deploy.yml`.
 | `bot/cogs/calendar_sync.py` | `internal/cogs/calendarsync` |
 | `bot/cogs/event_reminders.py` (the loop) | `internal/cogs/reminders` |
 | `bot/cogs/assistant.py` | `internal/cogs/assistant` |
-| `bot/assistant/{agent,knowledge,documents}.py` | `internal/assistant` |
+| `bot/assistant/{agent,knowledge,notion,drive,tools_files}.py` | `internal/assistant` |
 | `bot/cogs/members.py` | `internal/cogs/members` |
 | `bot/cogs/job_feed.py` | `internal/cogs/jobfeed` |
 | `bot/cogs/volunteer.py` | `internal/volunteer` (data, embed, buttons; the officer cog uses it too) |
