@@ -31,6 +31,7 @@ type Bot struct {
 	onReady   []func()
 	readyOnce sync.Once
 	ready     chan struct{}
+	arriving  map[string]bool // guilds Ready said are on their way (GUILD_CREATE pending)
 	stop      chan struct{}
 	loops     sync.WaitGroup
 	alertSend func(channelID, text string) error // tests replace how alerts are posted
@@ -79,14 +80,58 @@ func New(token string) (*Bot, error) {
 	s.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("Logged in as %s (ID: %s)", r.User.String(), r.User.ID)
 		log.Print("Ready to serve IEEE CS at UCF.")
-		b.readyOnce.Do(func() {
-			close(b.ready)
-			for _, f := range b.onReady {
-				go f()
-			}
-		})
+		b.gatewayReady(r.Guilds)
 	})
+	// The state has a guild's channels and roles once its GUILD_CREATE is in
+	s.AddHandler(func(s *discordgo.Session, g *discordgo.GuildCreate) { b.guildArrived(g.ID) })
 	return b, nil
+}
+
+// GuildReadyTimeout is how long readiness waits for the guilds Ready listed,
+// like discord.py's guild_ready_timeout.
+var GuildReadyTimeout = 10 * time.Second
+
+// gatewayReady: Ready only lists the guilds; their channels and roles come
+// after, in GUILD_CREATE. Like discord.py's wait_until_ready, loops and
+// OnReady wait for those (or the timeout), so their first run sees the server.
+func (b *Bot) gatewayReady(guilds []*discordgo.Guild) {
+	b.mu.Lock()
+	b.arriving = map[string]bool{}
+	for _, g := range guilds {
+		if g.Unavailable {
+			b.arriving[g.ID] = true
+		}
+	}
+	waiting := len(b.arriving)
+	b.mu.Unlock()
+	if waiting == 0 {
+		b.markReady()
+		return
+	}
+	time.AfterFunc(GuildReadyTimeout, b.markReady)
+}
+
+func (b *Bot) guildArrived(id string) {
+	b.mu.Lock()
+	if b.arriving == nil || !b.arriving[id] {
+		b.mu.Unlock()
+		return
+	}
+	delete(b.arriving, id)
+	all := len(b.arriving) == 0
+	b.mu.Unlock()
+	if all {
+		b.markReady()
+	}
+}
+
+func (b *Bot) markReady() {
+	b.readyOnce.Do(func() {
+		close(b.ready)
+		for _, f := range b.onReady {
+			go f()
+		}
+	})
 }
 
 // NewOffline is a bot with no Discord session, for tests: cogs, routes and
