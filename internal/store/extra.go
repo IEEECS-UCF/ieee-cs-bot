@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
 	"reflect"
 	"strings"
 )
@@ -11,9 +13,9 @@ import (
 // save without losing anything.
 type Extra map[string]json.RawMessage
 
-// unmarshalKeeping decodes data into known (a pointer to a struct with no
+// UnmarshalKeeping decodes data into known (a pointer to a struct with no
 // custom UnmarshalJSON) and returns the keys it has no field for.
-func unmarshalKeeping(data []byte, known any) (Extra, error) {
+func UnmarshalKeeping(data []byte, known any) (Extra, error) {
 	if err := json.Unmarshal(data, known); err != nil {
 		return nil, err
 	}
@@ -30,9 +32,9 @@ func unmarshalKeeping(data []byte, known any) (Extra, error) {
 	return all, nil
 }
 
-// marshalKeeping encodes known (a struct with no custom MarshalJSON) plus the
+// MarshalKeeping encodes known (a struct with no custom MarshalJSON) plus the
 // extra keys.
-func marshalKeeping(known any, extra Extra) ([]byte, error) {
+func MarshalKeeping(known any, extra Extra) ([]byte, error) {
 	data, err := json.Marshal(known)
 	if err != nil || len(extra) == 0 {
 		return data, err
@@ -62,6 +64,33 @@ func jsonKeys(t reflect.Type) map[string]bool {
 			name = f.Name
 		}
 		keys[name] = true
+	}
+	return keys
+}
+
+// LoadKeys returns the top-level keys of a JSON object file in file order
+// (Python dicts keep insertion order, and some lists follow it).
+func LoadKeys(path string) []string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil
+	}
+	var keys []string
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return keys
+		}
+		key, _ := tok.(string)
+		keys = append(keys, key)
+		var skip json.RawMessage
+		if dec.Decode(&skip) != nil {
+			return keys
+		}
 	}
 	return keys
 }

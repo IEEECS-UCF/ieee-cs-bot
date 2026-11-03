@@ -50,14 +50,14 @@ type Record struct {
 
 func (r *Record) UnmarshalJSON(data []byte) error {
 	type plain Record
-	extra, err := unmarshalKeeping(data, (*plain)(r))
+	extra, err := UnmarshalKeeping(data, (*plain)(r))
 	r.Extra = extra
 	return err
 }
 
 func (r Record) MarshalJSON() ([]byte, error) {
 	type plain Record
-	return marshalKeeping(plain(r), r.Extra)
+	return MarshalKeeping(plain(r), r.Extra)
 }
 
 // Empty reports whether the record holds nothing, so it can be dropped.
@@ -181,14 +181,14 @@ type Review struct {
 
 func (r *Review) UnmarshalJSON(data []byte) error {
 	type plain Review
-	extra, err := unmarshalKeeping(data, (*plain)(r))
+	extra, err := UnmarshalKeeping(data, (*plain)(r))
 	r.Extra = extra
 	return err
 }
 
 func (r Review) MarshalJSON() ([]byte, error) {
 	type plain Review
-	return marshalKeeping(plain(r), r.Extra)
+	return MarshalKeeping(plain(r), r.Extra)
 }
 
 // EventStore is the officer-set facts about events. It reads the file each
