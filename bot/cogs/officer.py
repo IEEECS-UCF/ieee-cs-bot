@@ -13,7 +13,7 @@ from bot.officer import render, members, metrics, tabling
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
 from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TablingSheetError, TABLING_SHEET_ID
 from bot.officer.steps import event_steps, problems, owner_of
-from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton, open_card, open_buttons,
+from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton, ReviewButton, open_card, open_buttons,
                                OFFICER_ROLE_IDS)
 
 # The officer tools, built around one idea: every event has a status (its
@@ -94,7 +94,7 @@ class Officer(commands.Cog):
         self.bot = bot
         self.cache = SnapshotCache(bot)
         self.store = EventStore()
-        bot.add_dynamic_items(OpenEventButton)
+        bot.add_dynamic_items(OpenEventButton, ReviewButton)
         self.digest_channel_id = int(os.getenv('OFFICER_DIGEST_CHANNEL_ID') or 0) or None
         self.nudge_channel_id = int(os.getenv('NUDGE_CHANNEL_ID') or 0) or None
         self.metrics_channel_id = int(os.getenv('METRICS_CHANNEL_ID') or 0) or None
@@ -129,7 +129,7 @@ class Officer(commands.Cog):
         self.daily_nudges.cancel()
         self.monthly_metrics.cancel()
         self.tabling_reminders.cancel()
-        self.bot.remove_dynamic_items(OpenEventButton)
+        self.bot.remove_dynamic_items(OpenEventButton, ReviewButton)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Every /officer command: Officer or Exec role required."""
@@ -516,6 +516,14 @@ class Officer(commands.Cog):
             msg_id = (await thread.send(content, view=view, allowed_mentions=discord.AllowedMentions.none())).id
         state["status"][gid] = {"id": msg_id, "text": text}
         save_json(NUDGES_FILE, state)
+
+    async def event_post(self, event):
+        """The event's post in the nudge channel (created if needed), or None if there's no nudge channel."""
+        channel = self.bot.get_channel(self.nudge_channel_id) if self.nudge_channel_id else None
+        if channel is None:
+            return None
+        state = load_json(NUDGES_FILE, {"sent": {}, "threads": {}, "day": None})
+        return await self.event_thread(channel, event, state)
 
     async def event_thread(self, channel, event, state):
         """The event's own thread (forum post) in the nudge channel, created on first use."""

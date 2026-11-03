@@ -156,10 +156,12 @@ def promote_steps(e, record, marks, snap, today, start):
                      'start-time', 'title', vtools_location),
     ]
     announced = marks.get('announcement')
+    waiting = record.get('reviews', {}).get('announcement', {}).get('status') == 'pending'
     steps.append(Step("announcement", "Promote", "Announcement",
                       DONE if announced == 'done' else SKIP if announced == SKIPPED
                       else timed(today, start - datetime.timedelta(days=7)),
-                      "posted" if announced == 'done' else "", ["draft", "mark:announcement"]))
+                      "posted" if announced == 'done' else "waiting for another officer to approve the draft" if waiting
+                      else "", ["draft", "mark:announcement"]))
     return steps
 
 def reminder_step(e, record, snap, now):
@@ -171,11 +173,19 @@ def reminder_step(e, record, snap, now):
     who = f"<@&{role_id}>" if kind == 'role' else "@everyone" if kind == 'everyone' else "no ping"
     if did and int(did) in snap.reminders_sent:
         return Step("reminder", "Run", "Day-of reminder", DONE, "posted", ["reminder"])
+    pending = record.get('reviews', {}).get('reminder', {})
+    if send and pending.get('for') == e['start'].isoformat():
+        if pending['status'] == 'pending':
+            return Step("reminder", "Run", "Day-of reminder", TODO, "waiting for an officer to approve it", ["reminder"])
+        if pending['status'] == 'approved':
+            return Step("reminder", "Run", "Day-of reminder", LATER,
+                        f"approved, posts {e['start']:%a} at {event_reminders.REMINDER_HOUR}:00", ["reminder"])
     if not send:
         state = SKIP if (override or {}).get('send') == 'never' else (WARN if (e['start'] - now).days <= 3 else LATER)
         return Step("reminder", "Run", "Day-of reminder", state, why, ["reminder"])
     return Step("reminder", "Run", "Day-of reminder", LATER,
-                f"posts {e['start']:%a} at {event_reminders.REMINDER_HOUR}:00, {who}", ["reminder"])
+                f"goes up for review the day before, posts {e['start']:%a} at {event_reminders.REMINDER_HOUR}:00 "
+                f"if approved, {who}", ["reminder"])
 
 def run_steps(e, record, marks, snap, today, start, now):
     steps = []

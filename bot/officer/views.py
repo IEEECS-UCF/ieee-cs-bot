@@ -1,6 +1,5 @@
 import io
 import os
-import re
 import asyncio
 import datetime
 
@@ -17,11 +16,13 @@ from bot.cogs import volunteer, event_reminders
 from bot.officer.data import EventStore, SKIPPED, add_deadline, remove_deadline, load_deadlines, deadline_key
 from bot.officer.sources import TZ, fetch_repos, fetch_tabling, to_event, TABLING_SHEET_ID, WINDOW_AHEAD_DAYS
 from bot.officer.steps import event_steps, owner_of, booked_room, clashes, PROBLEMS
-from bot.officer import render, new_event, tabling
+from bot.officer import render, new_event, tabling, review
+from bot.officer.review import mentions_in
 
 # The interactive parts of the officer tools. Every view here is ephemeral
 # (only the officer who opened it sees it) except OpenEventButton, which sits
-# on nudges and the digest and checks the officer role itself.
+# on nudges and the digest, and ReviewButton, which sits on posts waiting for
+# approval. Both check the officer role themselves.
 
 OFFICER_ROLE_IDS = {int(r) for r in os.getenv('OFFICER_ROLE_IDS', '1449921163248533525,1424610929424994477').split(',') if r.strip()}
 VIEW_TIMEOUT = 840  # Discord lets the bot edit an ephemeral message for 15 minutes
@@ -51,12 +52,6 @@ MARKABLE = [("description", "Description"), ("flyer", "Flyer"), ("announcement",
 
 def is_officer(user):
     return bool({role.id for role in getattr(user, 'roles', [])} & OFFICER_ROLE_IDS)
-
-def mentions_in(text):
-    """Allow exactly the mentions written into an approved post, nothing else."""
-    roles = [discord.Object(int(r)) for r in re.findall(r'<@&(\d+)>', text)]
-    return discord.AllowedMentions(everyone='@everyone' in text, users=False, roles=roles or False)
-
 
 # ---------- opening a card ----------
 
@@ -144,11 +139,9 @@ class CardView(discord.ui.View):
         link = f"https://discord.com/events/{os.getenv('GUILD_ID')}/{did}" if did else ""
         draft = event_text.announcement_draft(event, link, f"<@&{role_id}>" if role_id else None)
         caption = event_text.instagram_caption(event)
-        text = (f"**#announcements draft** (mentions only ping when posted)\n```md\n{draft}\n```"
-                f"\n**Instagram caption**\n```\n{caption}\n```")
-        channel_id = os.getenv('ANNOUNCE_CHANNEL_ID') or os.getenv('REMINDER_CHANNEL_ID')
-        view = DraftView(self, draft, int(channel_id)) if channel_id else None
-        await interaction.response.send_message(text[:2000], view=view, ephemeral=True)
+        text = (f"**#announcements draft** (mentions only ping when posted; another officer has to approve it first)"
+                f"\n```md\n{draft}\n```\n**Instagram caption**\n```\n{caption}\n```")
+        await interaction.response.send_message(text[:2000], view=DraftView(self, event, draft), ephemeral=True)
 
     async def do_reminder(self, interaction, event):
         await interaction.response.send_message("Day-of reminder for this event:", view=ReminderPicker(self), ephemeral=True)
@@ -544,51 +537,145 @@ class DraftEdit(discord.ui.Modal, title="Edit the announcement"):
 
     async def on_submit(self, interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.followup.send(await self.view.post_once(interaction, self.body.value), ephemeral=True)
+        await interaction.followup.send(await self.view.send_once(interaction, self.body.value), ephemeral=True)
 
 class DraftView(discord.ui.View):
-    """Posts the draft at most once, and marks the event's announcement done."""
-    def __init__(self, card, draft, channel_id):
+    """Sends the draft for review at most once. It only posts after another officer approves it."""
+    def __init__(self, card, event, draft):
         super().__init__(timeout=VIEW_TIMEOUT)
-        self.card, self.draft, self.channel_id, self.posted = card, draft, channel_id, False
+        self.card, self.event, self.draft, self.sent = card, event, draft, False
 
-    async def post_once(self, interaction, text):
-        """Post and return what happened. Answer the interaction first: this can take a few seconds."""
-        if self.posted:
-            return "Already posted from this draft."
-        channel = interaction.client.get_channel(self.channel_id)
-        if channel is None:
-            return "Couldn't find the announcements channel."
-        self.posted = True  # set before the await, so a double click can't post twice
+    async def send_once(self, interaction, text):
+        """Open the review and return what happened. Answer the interaction first: this can take a few seconds."""
+        if self.sent:
+            return "Already sent for review."
+        self.sent = True  # set before the await, so a double click can't send twice
+        owner, _ = owner_of(self.event, store.get(self.event['id']))
         try:
-            message = await channel.send(text, allowed_mentions=mentions_in(text))
+            result, message = await review.open_review(
+                interaction.client, self.event, "announcement", text, interaction.user.id,
+                ping=owner if owner and owner != interaction.user.id else None, view_for=review_buttons)
         except discord.HTTPException as e:
-            self.posted = False
-            return f"Discord didn't accept the post ({e}). Nothing was posted; try again."
+            result, message = None, f"Discord didn't accept it ({e}). Try again."
+        if result is None:
+            self.sent = False
+            return message
         self.stop()
-        store.mark(self.card.gid, "announcement", "done")
-        print(f"Announcement posted by {interaction.user} ({interaction.user.id})")
+        print(f"Announcement for {self.event['name']} sent for review by {interaction.user} ({interaction.user.id})")
         await self.card.redraw()
-        return f"Posted: {message.jump_url}"
+        return f"Sent for review: {message.jump_url}\nIt posts once an officer other than you approves it."
 
-    @discord.ui.button(label="Post as is", style=discord.ButtonStyle.primary)
+    @discord.ui.button(label="Send for review", style=discord.ButtonStyle.primary)
     async def post(self, interaction, button):
-        if self.posted:
-            await interaction.response.send_message("Already posted from this draft.", ephemeral=True)
+        if self.sent:
+            await interaction.response.send_message("Already sent for review.", ephemeral=True)
             return
         await interaction.response.defer()
-        result = await self.post_once(interaction, self.draft)
-        if self.posted:
+        result = await self.send_once(interaction, self.draft)
+        if self.sent:
             await interaction.edit_original_response(content=result, view=None)
         else:
             await interaction.followup.send(result, ephemeral=True)  # keep the draft and buttons to retry
 
-    @discord.ui.button(label="Edit and post", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Edit, then send for review", style=discord.ButtonStyle.secondary)
     async def edit(self, interaction, button):
-        if self.posted:
-            await interaction.response.send_message("Already posted from this draft.", ephemeral=True)
+        if self.sent:
+            await interaction.response.send_message("Already sent for review.", ephemeral=True)
             return
         await interaction.response.send_modal(DraftEdit(self))
+
+
+# ---------- posts waiting for approval ----------
+
+def review_buttons(gid, kind):
+    view = discord.ui.View(timeout=None)
+    view.add_item(ReviewButton("approve", kind, gid))
+    view.add_item(ReviewButton("edit", kind, gid))
+    return view
+
+def review_when(cog, gid, kind):
+    """When an approved day-of reminder posts, as text (None for announcements)."""
+    if kind != "reminder":
+        return None
+    event = cog.cache.with_store().event(gid) if cog and cog.cache.snapshot else None
+    return f"{event['start']:%a %b %-d} at {event_reminders.REMINDER_HOUR}:00" if event else None
+
+async def approve(interaction, gid, kind):
+    """Approve someone else's post: an announcement posts now, a reminder at its time."""
+    current = review.get(gid, kind)
+    ok, why = review.can_approve(current, interaction.user.id)
+    if not ok:
+        await interaction.response.send_message(why, ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    cog = interaction.client.get_cog("Officer")
+    approved = {**current, "status": review.APPROVED, "approver": interaction.user.id}
+    if kind == "announcement":
+        channel = interaction.client.get_channel(review.target_channel_id(kind) or 0)
+        if channel is None:
+            await interaction.followup.send("Posting announcements is turned off right now (no announcements channel set), "
+                                            "so nothing was posted. It's still waiting for approval.", ephemeral=True)
+            return
+        try:
+            posted = await channel.send(current["text"], allowed_mentions=mentions_in(current["text"]))
+        except discord.HTTPException as e:
+            await interaction.followup.send(f"Discord didn't accept the post ({e}). Nothing was posted; try again.", ephemeral=True)
+            return
+        approved.update(status=review.POSTED, posted=posted.jump_url)
+        store.mark(gid, "announcement", "done")
+        reply = f"Posted: {posted.jump_url}"
+    else:
+        reply = f"Approved. It posts {review_when(cog, gid, kind) or 'on the day of the event'}."
+    review.put(gid, kind, approved)
+    print(f"{review.KINDS[kind]} for {current['name']} approved by {interaction.user} ({interaction.user.id})")
+    await review.show(interaction.client, kind, approved, review_when(cog, gid, kind),
+                      view=review_buttons(gid, kind) if approved["status"] == review.APPROVED else None)
+    await interaction.followup.send(reply, ephemeral=True)
+
+class ReviewEdit(discord.ui.Modal):
+    def __init__(self, gid, kind, current):
+        super().__init__(title=f"Edit the {review.KINDS[kind].lower()}"[:45], timeout=VIEW_TIMEOUT)
+        self.gid, self.kind = gid, kind
+        self.body = discord.ui.TextInput(label=review.KINDS[kind], style=discord.TextStyle.paragraph,
+                                         default=current["text"][:2000], max_length=2000)
+        self.add_item(self.body)
+
+    async def on_submit(self, interaction):
+        current = review.get(self.gid, self.kind)
+        if current is None or current["status"] not in (review.PENDING, review.APPROVED):
+            await interaction.response.send_message("This isn't waiting for approval anymore.", ephemeral=True)
+            return
+        changed = review.edited(current, self.body.value, interaction.user.id)
+        review.put(self.gid, self.kind, changed)
+        cog = interaction.client.get_cog("Officer")
+        await interaction.response.send_message("Saved. Another officer has to approve your version.", ephemeral=True)
+        await review.show(interaction.client, self.kind, changed, review_when(cog, self.gid, self.kind),
+                          view=review_buttons(self.gid, self.kind))
+
+class ReviewButton(discord.ui.DynamicItem[discord.ui.Button],
+                   template=r'review:(?P<action>approve|edit):(?P<kind>announcement|reminder):(?P<gid>[A-Za-z0-9_]+)'):
+    """Approve or Edit on a post waiting for review. Works after restarts; checks the officer role."""
+    def __init__(self, action, kind, gid):
+        label, style = ("Approve", discord.ButtonStyle.success) if action == "approve" else ("Edit", discord.ButtonStyle.secondary)
+        super().__init__(discord.ui.Button(label=label, style=style, custom_id=f"review:{action}:{kind}:{gid}"))
+        self.action, self.kind, self.gid = action, kind, gid
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match["action"], match["kind"], match["gid"])
+
+    async def callback(self, interaction):
+        if not is_officer(interaction.user):
+            await interaction.response.send_message("Only officers can review posts.", ephemeral=True)
+            return
+        if self.action == "approve":
+            await approve(interaction, self.gid, self.kind)
+            return
+        current = review.get(self.gid, self.kind)
+        if current is None or current["status"] not in (review.PENDING, review.APPROVED):
+            await interaction.response.send_message("This isn't waiting for approval anymore.", ephemeral=True)
+            return
+        await interaction.response.send_modal(ReviewEdit(self.gid, self.kind, current))
 
 
 # ---------- board ----------

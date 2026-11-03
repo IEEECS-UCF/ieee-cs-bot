@@ -43,33 +43,6 @@ def test_best_fit_wins_and_hand_links_are_taken():
     assert "a" not in sources.assign_listings([a], lambda e: [la], "startsOn", "name", taken=["5"])
 
 
-# ---------- announcement drafts ----------
-
-class Channel:
-    def __init__(self, fail):
-        self.fail, self.sent = fail, []
-    async def send(self, text, **kwargs):
-        if self.fail:
-            raise discord.HTTPException(types.SimpleNamespace(status=500, reason="boom"), "boom")
-        self.sent.append(text)
-        return types.SimpleNamespace(jump_url="https://discord.com/x")
-
-async def test_a_failed_post_can_be_retried():
-    channel = Channel(fail=True)
-    async def redraw(fresh=False):
-        pass
-    card = types.SimpleNamespace(gid="g1", redraw=redraw)
-    draft = views.DraftView(card, "Hello", 123)
-    interaction = types.SimpleNamespace(client=types.SimpleNamespace(get_channel=lambda cid: channel),
-                                        user=types.SimpleNamespace(id=1))
-    assert "Nothing was posted" in await draft.post_once(interaction, "Hello")
-    assert not draft.posted and EventStore().get("g1") == {}
-    channel.fail = False
-    assert (await draft.post_once(interaction, "Hello")).startswith("Posted:")
-    assert channel.sent == ["Hello"] and EventStore().get("g1")["marks"]["announcement"] == "done"
-    assert await draft.post_once(interaction, "Hello") == "Already posted from this draft."
-
-
 # ---------- new events past the board's window ----------
 
 async def test_far_off_new_event_still_opens_its_card(monkeypatch):
