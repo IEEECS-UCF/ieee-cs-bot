@@ -228,3 +228,8 @@ def test_status_says_when_nothing_is_open():
     e = event()
     assert render.nudge_status(e, [], None).endswith("✅ Nothing open right now.")
     assert "No owner yet." in render.nudge_status(e, [], None)
+
+
+def test_officer_commands_are_admins_only_by_default():
+    # The server's Integrations settings allow the Officer and Exec roles
+    assert officer_cog.Officer.officer.default_permissions.value == 0

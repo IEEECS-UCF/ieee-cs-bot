@@ -90,7 +90,9 @@ async def recent_posts(channel):
 class Officer(commands.Cog):
     officer = app_commands.Group(
         name="officer", description="Officer tools (only you can see the replies).",
-        default_permissions=discord.Permissions(manage_events=True),
+        # Admins only by default: the server's Integrations settings allow the Officer
+        # and Exec roles. interaction_check still checks the roles itself.
+        default_permissions=discord.Permissions.none(),
     )
 
     def __init__(self, bot):

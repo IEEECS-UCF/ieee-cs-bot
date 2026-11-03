@@ -239,7 +239,10 @@ func officerCheck(ctx *botkit.Ctx) bool {
 }
 
 func command() *discordgo.ApplicationCommand {
-	perms := int64(discordgo.PermissionManageEvents)
+	// Admins only by default: the server's Integrations settings allow the
+	// Officer and Exec roles (a Manage Events gate never let officers in from
+	// text channels). officerCheck still checks the roles itself.
+	perms := int64(0)
 	min := 1
 	return &discordgo.ApplicationCommand{
 		Name: "officer", Description: "Officer tools (only you can see the replies).", DefaultMemberPermissions: &perms,
