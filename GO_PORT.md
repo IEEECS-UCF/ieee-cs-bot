@@ -75,3 +75,27 @@ split out into `internal/cogs/*`.
   and the server-side fallback beta, same as the Python calls.
 - **SQLite FTS5**: `modernc.org/sqlite` (pure Go, FTS5 built in), so the binary
   cross-compiles for the VM without cgo.
+
+## Building
+
+Go 1.27 or newer. From the repo root:
+
+```bash
+go build -o ieee-bot-go ./cmd/ieee-bot
+go test ./...
+```
+
+For the VM, cross-compile (no cgo needed; use `GOARCH=arm64` if the VM is an
+Ampere shape):
+
+```bash
+GOOS=linux GOARCH=amd64 go build -trimpath -ldflags=-s -o ieee-bot-go ./cmd/ieee-bot
+```
+
+The binary reads the same environment as the Python bot (`/etc/ieee-bot.env`
+or a `.env` in the working directory) and the same relative paths
+(`data/`, `cache/`, `credentials/google_service.json`, `bot/deadlines.json`),
+so run it from a directory laid out like the repo.
+
+One new, optional variable: `COMMAND_GUILD_ID`. When set, slash commands are
+registered on that guild only (they show up at once) instead of globally.
