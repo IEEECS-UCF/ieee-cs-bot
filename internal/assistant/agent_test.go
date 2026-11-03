@@ -36,8 +36,8 @@ func (f fixedEvents) Get(bool) (*officer.Snapshot, error) { return f.snap, nil }
 type fakeSync struct{ synced []time.Duration }
 
 func (s *fakeSync) EventMap() map[string]string { return nil }
-func (s *fakeSync) DownloadFlyer(string) []byte  { return nil }
-func (s *fakeSync) SyncSoon(d time.Duration)     { s.synced = append(s.synced, d) }
+func (s *fakeSync) DownloadFlyer(string) []byte { return nil }
+func (s *fakeSync) SyncSoon(d time.Duration)    { s.synced = append(s.synced, d) }
 
 func makeAsk(t *testing.T, events ...eventtext.Event) (*Ask, *fakeSync) {
 	t.Helper()
