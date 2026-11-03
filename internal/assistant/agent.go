@@ -121,10 +121,17 @@ type Ask struct {
 	AskerID   int64
 	AskerName string
 	Knowledge *Knowledge
-	ChannelID string // where /officer ask was run
-	Events    Events // the officer tools' event data; nil answers without it
+	ChannelID string                    // where /officer ask was run
+	Events    Events                    // the officer tools' event data; nil answers without it
+	NameOf    func(userID int64) string // a member's display name (tests); nil reads the guild
 	Changes   []Change
 	Usage     Usage
+}
+
+// NewMessage calls Claude (swappable in tests).
+var NewMessage = func(ctx context.Context, params anthropic.BetaMessageNewParams) (*anthropic.BetaMessage, error) {
+	client := anthropic.NewClient()
+	return client.Beta.Messages.New(ctx, params)
 }
 
 // Run returns Claude's reply as text (changes, if any, are in a.Changes).
@@ -132,9 +139,8 @@ func (a *Ask) Run(ctx context.Context, question string) string {
 	now := time.Now().In(TZ())
 	messages := []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(
 		fmt.Sprintf("Today is %s Eastern. Asked by %s.\n\n%s", pytime.Strftime(now, "%A, %B %-d, %Y, %-I:%M %p"), a.AskerName, question)))}
-	client := anthropic.NewClient()
 	for range MaxTurns {
-		response, err := client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
+		response, err := NewMessage(ctx, anthropic.BetaMessageNewParams{
 			Model: Model, MaxTokens: 16000,
 			OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortLow},
 			Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},

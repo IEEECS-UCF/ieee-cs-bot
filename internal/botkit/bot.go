@@ -89,6 +89,13 @@ func New(token string) (*Bot, error) {
 	return b, nil
 }
 
+// NewOffline is a bot with no Discord session, for tests: cogs, routes and
+// views work, anything that talks to Discord doesn't.
+func NewOffline() *Bot {
+	return &Bot{handlers: map[string]CommandFunc{}, complete: map[string]AutocompleteFunc{}, checks: map[string]Check{},
+		views: newViewRegistry(), cogs: map[string]any{}, ready: make(chan struct{}), stop: make(chan struct{})}
+}
+
 // OnReady runs f once, the first time the gateway is ready (cog_load +
 // wait_until_ready in discord.py).
 func (b *Bot) OnReady(f func()) {
