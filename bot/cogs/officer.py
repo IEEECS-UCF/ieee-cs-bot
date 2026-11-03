@@ -487,7 +487,7 @@ class Officer(commands.Cog):
                 continue
             thread = await self.event_thread(channel, event, state)
             if changed:
-                await self.show_status(thread, gid, text, state)
+                await self.show_status(thread, gid, text, state, now)
             if gid in due:
                 link = f"https://discord.com/channels/{channel.guild.id}/{thread.id}/{state['status'][gid]['id']}"
                 await thread.send(render.nudge_ping(event, due[gid], owner, link),
@@ -501,17 +501,19 @@ class Officer(commands.Cog):
             state["day"] = now.date().isoformat()
         save_json(NUDGES_FILE, state)
 
-    async def show_status(self, thread, gid, text, state):
+    async def show_status(self, thread, gid, text, state, now):
         """Edit the event's status message: the post's first message, unless an officer started
-        the post or the message is gone, in which case a new one is posted and used from then on."""
+        the post or the message is gone, in which case a new one is posted and used from then on.
+        The "Updated" line only changes when the text does."""
+        content = f"{text}\n-# Updated <t:{int(now.timestamp())}:R>"
         view = discord.ui.View(timeout=None)
         view.add_item(OpenEventButton(gid))
         msg_id = int(state["status"].get(gid, {}).get("id") or thread.id)
         try:
-            await thread.get_partial_message(msg_id).edit(content=text, view=view,
+            await thread.get_partial_message(msg_id).edit(content=content, view=view,
                                                           allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException:
-            msg_id = (await thread.send(text, view=view, allowed_mentions=discord.AllowedMentions.none())).id
+            msg_id = (await thread.send(content, view=view, allowed_mentions=discord.AllowedMentions.none())).id
         state["status"][gid] = {"id": msg_id, "text": text}
         save_json(NUDGES_FILE, state)
 

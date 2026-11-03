@@ -209,6 +209,7 @@ async def test_status_is_edited_and_the_owner_pinged_once(monkeypatch, tmp_path)
     await cog.send_nudges_if_due(force=True)
     assert [mid for mid, _ in thread.edits] == [77]                  # the post's first message
     assert "Still open:" in thread.edits[0][1]
+    assert thread.edits[0][1].endswith(f"-# Updated <t:{int(NOW.timestamp())}:R>")
     assert len(thread.sent) == 1 and "/5/77/77" in thread.sent[0]   # the ping links to the status
     await cog.send_nudges_if_due()                                   # same day, nothing changed
     assert len(thread.edits) == 1 and len(thread.sent) == 1
