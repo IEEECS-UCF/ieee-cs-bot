@@ -17,7 +17,7 @@ import datetime
 EVENTS_FILE = "data/events.json"
 DEADLINES_FILE = "bot/deadlines.json"
 DEADLINES_EXTRA_FILE = "data/deadlines_extra.json"  # deadlines added or hidden from Discord
-NUDGES_FILE = "data/nudges.json"                    # {"sent": {"<event>|<step>": date}, "threads": {...}, "day": date}
+NUDGES_FILE = "data/nudges.json"                    # {"sent": {"<event>|<step>": date}, "threads": {...}, "status": {...}, "day": date}
 DIGEST_STATE_FILE = "data/digest.json"
 
 # Files the event store replaced; read once by migrate() and then renamed

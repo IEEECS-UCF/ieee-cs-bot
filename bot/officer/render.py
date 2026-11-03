@@ -154,7 +154,16 @@ def chapter_embeds(tabling_rows, tasks, today, membership=None, guild_id=None, t
 
 # ---------- nudges ----------
 
-def nudge_text(e, items, owner):
-    who = f"<@{owner}> " if owner else "No owner yet. "
-    return (who + f"Still open for **{e['name']}** ({fmt_day(e['start'])}):\n"
+def nudge_status(e, items, owner):
+    """The status message at the top of an event's post, edited as things change."""
+    who = f"Owner: <@{owner}>" if owner else "No owner yet."
+    head = f"**{e['name']}** ({fmt_day(e['start'])}) · {who}\n"
+    if not items:
+        return head + "✅ Nothing open right now."
+    return (head + "Still open:\n"
             + "\n".join(f"{s.state} **{s.label}**" + (f": {s.detail}" if s.detail else "") for s in items))
+
+def nudge_ping(e, items, owner, status_link):
+    """The short reply that pings the owner, since edits to the status don't notify anyone."""
+    who = f"<@{owner}>" if owner else "No owner yet."
+    return f"{who} Due for **{e['name']}**: {', '.join(s.label for s in items)}. Details: {status_link}"

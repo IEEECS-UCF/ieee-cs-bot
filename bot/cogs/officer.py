@@ -21,7 +21,7 @@ from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton
 #   /officer events   the board: every active event, one line each, and New event
 #   /officer event    one event's card, with a menu that fixes each step
 #   /officer chapter  deadlines, tabling, volunteer tasks, members, monthly report
-# The digest (DIGEST_DAYS) and the daily nudges are drawn from the same steps.
+# The digest (DIGEST_DAYS) and the event posts (status + daily pings) are drawn from the same steps.
 # Last month's report posts on the 1st (METRICS_CHANNEL_ID).
 
 WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
@@ -460,31 +460,59 @@ class Officer(commands.Cog):
         await self.bot.wait_until_ready()
 
     async def send_nudges_if_due(self, force=False):
+        """Every run, each event's post gets its status message edited to what's open now.
+        Once a day after NUDGE_HOUR, the owner also gets a short ping for steps due a nudge."""
         now = datetime.datetime.now(TZ)
         state = load_json(NUDGES_FILE, {"sent": {}, "threads": {}, "day": None})
-        if not force and (now.hour < NUDGE_HOUR or state.get("day") == now.date().isoformat()):
-            return
+        state.setdefault("status", {})   # event id -> {"id": status message id, "text": what it says}
         channel = self.bot.get_channel(self.nudge_channel_id)
         if channel is None:
             print("Error: Could not find the nudge channel.")
             return
-        snap = await self.cache.get(fresh=True)
-        open_steps = {e['id']: problems(steps) for e, steps in render.board_rows(snap, now) if problems(steps)}
-        due = due_nudges(open_steps, state["sent"], now.date())
-        for gid, steps in due.items():
-            event = snap.event(gid)
+        ping_day = force or (now.hour >= NUDGE_HOUR and state.get("day") != now.date().isoformat())
+        snap = await self.cache.get(fresh=ping_day)
+        board = {e['id']: (e, problems(steps)) for e, steps in render.board_rows(snap, now)}
+        for gid in state["threads"]:   # a post keeps its status current after its event drops off the board
+            if gid not in board and (event := snap.event(gid)) is not None:
+                board[gid] = (event, [])
+        due = due_nudges({gid: items for gid, (_, items) in board.items() if items},
+                         state["sent"], now.date()) if ping_day else {}
+        for gid, (event, items) in board.items():
+            if not items and gid not in state["threads"]:
+                continue
             owner, _ = owner_of(event, snap.store.get(gid, {}))
+            text = render.nudge_status(event, items, owner)
+            changed = state["status"].get(gid, {}).get("text") != text
+            if not (changed or gid in due):
+                continue
             thread = await self.event_thread(channel, event, state)
-            view = discord.ui.View(timeout=None)
-            view.add_item(OpenEventButton(gid))
-            await thread.send(render.nudge_text(event, steps, owner), view=view,
-                              allowed_mentions=discord.AllowedMentions(
-                                  everyone=False, roles=False, users=[discord.Object(owner)] if owner else False))
-            for step in steps:
-                state["sent"][f"{gid}|{step.key}"] = now.date().isoformat()
-            save_json(NUDGES_FILE, state)
-            print(f"Nudged {event['name']}: {', '.join(s.key for s in steps)}")
-        state["day"] = now.date().isoformat()
+            if changed:
+                await self.show_status(thread, gid, text, state)
+            if gid in due:
+                link = f"https://discord.com/channels/{channel.guild.id}/{thread.id}/{state['status'][gid]['id']}"
+                await thread.send(render.nudge_ping(event, due[gid], owner, link),
+                                  allowed_mentions=discord.AllowedMentions(
+                                      everyone=False, roles=False, users=[discord.Object(owner)] if owner else False))
+                for step in due[gid]:
+                    state["sent"][f"{gid}|{step.key}"] = now.date().isoformat()
+                save_json(NUDGES_FILE, state)
+                print(f"Nudged {event['name']}: {', '.join(s.key for s in due[gid])}")
+        if ping_day:
+            state["day"] = now.date().isoformat()
+        save_json(NUDGES_FILE, state)
+
+    async def show_status(self, thread, gid, text, state):
+        """Edit the event's status message: the post's first message, unless an officer started
+        the post or the message is gone, in which case a new one is posted and used from then on."""
+        view = discord.ui.View(timeout=None)
+        view.add_item(OpenEventButton(gid))
+        msg_id = int(state["status"].get(gid, {}).get("id") or thread.id)
+        try:
+            await thread.get_partial_message(msg_id).edit(content=text, view=view,
+                                                          allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            msg_id = (await thread.send(text, view=view, allowed_mentions=discord.AllowedMentions.none())).id
+        state["status"][gid] = {"id": msg_id, "text": text}
         save_json(NUDGES_FILE, state)
 
     async def event_thread(self, channel, event, state):
@@ -508,7 +536,7 @@ class Officer(commands.Cog):
                 await thread.edit(archived=False)
         elif isinstance(channel, discord.ForumChannel):
             tag = forum_tag(channel.available_tags, event)
-            created = await channel.create_thread(name=name, content=f"Tracking **{event['name']}**: open items get posted here.",
+            created = await channel.create_thread(name=name, content=f"Tracking **{event['name']}**.",
                                                   applied_tags=[tag] if tag else [])
             thread = created.thread
         else:

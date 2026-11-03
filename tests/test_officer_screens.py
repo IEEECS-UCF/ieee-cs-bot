@@ -162,3 +162,68 @@ async def test_officers_existing_post_is_used_instead_of_a_new_one():
     thread = await cog.event_thread(forum, event(gid="t1", name="TechX"), state)
     assert thread is officers and state["threads"] == {"t1": officers.id}
     assert forum.made == [] and post.unarchived == [officers.id]
+
+
+# ---------- each event post keeps one status message up to date ----------
+
+class Thread:
+    """A post whose first message is the bot's (or an officer's, with ours=False)."""
+    def __init__(self, id, ours=True):
+        self.id, self.ours, self.edits, self.sent = id, ours, [], []
+    def get_partial_message(self, mid):
+        thread = self
+        class Message:
+            async def edit(self, content, view, allowed_mentions):
+                if mid == thread.id and not thread.ours:
+                    raise discord.Forbidden(types.SimpleNamespace(status=403, reason="Forbidden"), "not ours")
+                thread.edits.append((mid, content))
+        return Message()
+    async def send(self, content, view=None, allowed_mentions=None):
+        self.sent.append(content)
+        return types.SimpleNamespace(id=1000 + len(self.sent))
+
+class FixedNow(datetime.datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return NOW
+
+def nudge_cog(monkeypatch, tmp_path, snap, thread):
+    monkeypatch.setattr(officer_cog, "NUDGES_FILE", str(tmp_path / "nudges.json"))
+    monkeypatch.setattr(officer_cog, "datetime", types.SimpleNamespace(
+        datetime=FixedNow, date=datetime.date, timedelta=datetime.timedelta))
+    cog = officer_cog.Officer.__new__(officer_cog.Officer)
+    cog.bot = types.SimpleNamespace(get_channel=lambda i: types.SimpleNamespace(guild=types.SimpleNamespace(id=5)))
+    cog.nudge_channel_id = 1
+    async def get(fresh=False):
+        return snap
+    cog.cache = types.SimpleNamespace(get=get)
+    async def event_thread(channel, e, state):
+        state["threads"][e['id']] = thread.id
+        return thread
+    cog.event_thread = event_thread
+    return cog
+
+async def test_status_is_edited_and_the_owner_pinged_once(monkeypatch, tmp_path):
+    snap, thread = snapshot([event(gid="g1", days=5)]), Thread(77)
+    cog = nudge_cog(monkeypatch, tmp_path, snap, thread)
+    await cog.send_nudges_if_due(force=True)
+    assert [mid for mid, _ in thread.edits] == [77]                  # the post's first message
+    assert "Still open:" in thread.edits[0][1]
+    assert len(thread.sent) == 1 and "/5/77/77" in thread.sent[0]   # the ping links to the status
+    await cog.send_nudges_if_due()                                   # same day, nothing changed
+    assert len(thread.edits) == 1 and len(thread.sent) == 1
+    snap.events[0]['name'] = "Bash Scripting Workshop II"           # something changed: edit, no ping
+    await cog.send_nudges_if_due()
+    assert len(thread.edits) == 2 and "Workshop II" in thread.edits[1][1] and len(thread.sent) == 1
+
+async def test_officers_post_gets_its_own_status_message(monkeypatch, tmp_path):
+    thread = Thread(77, ours=False)
+    cog = nudge_cog(monkeypatch, tmp_path, snapshot([event(gid="g1", days=5)]), thread)
+    await cog.send_nudges_if_due(force=True)
+    assert thread.edits == [] and thread.sent[0].startswith("**Bash Scripting Workshop**")
+    assert "/5/77/1001" in thread.sent[1]                            # the ping links to the new status
+
+def test_status_says_when_nothing_is_open():
+    e = event()
+    assert render.nudge_status(e, [], None).endswith("✅ Nothing open right now.")
+    assert "No owner yet." in render.nudge_status(e, [], None)
