@@ -19,16 +19,21 @@ from bot.officer.data import EventStore
 #       "approver": user id, "posted": jump url,
 #       "message": [thread id, message id],   # the review message in the event's post
 #       "name": the event's name, "for": event start (reminders), so a moved event gets a fresh review,
-#       "flyer": the calendar's flyer link, "has_flyer": whether it's attached to the review message
-#                (announcements: approving posts that same attachment with the text),
+#       "flyer": the calendar's flyer link, "has_flyer": whether an image is attached to the review
+#                message (approving an announcement posts that same attachment with the text),
+#       "image": the attachment's file name,
+#       "emergency": the reason, when an officer posted it right away without review,
 #   }
 #
 # and as a message with Approve / Edit buttons in the event's post in the nudge forum.
+# General announcements (/officer announce) aren't tied to an event: they're stored
+# under a "general_<id>" key and reviewed in one "General announcements" post.
 # Announcements post as soon as they're approved. Day-of reminders post at
 # REMINDER_HOUR on the day, and only if approved by then (or as soon as they are,
 # before the event starts).
 
-KINDS = {"announcement": "Announcement", "reminder": "Day-of reminder"}
+KINDS = {"announcement": "Announcement", "reminder": "Day-of reminder", "general": "General announcement"}
+POSTS_NOW = ("announcement", "general")  # approving these posts right away
 FLYER_FILE = "flyer.png"
 PENDING, APPROVED, POSTED, MISSED, CANCELLED = "pending", "approved", "posted", "missed", "cancelled"
 store = EventStore()
@@ -41,7 +46,7 @@ def mentions_in(text):
 
 def target_channel_id(kind):
     """Where an approved post goes (None while posting is turned off)."""
-    if kind == "announcement":
+    if kind in POSTS_NOW:
         value = os.getenv('ANNOUNCE_CHANNEL_ID') or os.getenv('REMINDER_CHANNEL_ID')
     else:
         value = os.getenv('REMINDER_CHANNEL_ID')
@@ -86,6 +91,9 @@ def status_line(kind, review, when=None):
         else "the bot, from the calendar"
     at = f" at {when}" if when else ""
     status = review["status"]
+    if status == POSTED and review.get("emergency"):
+        return (f"🚨 Posted by {by} without review (emergency post). Reason: {review['emergency']}\n"
+                f"{review.get('posted', '')}")
     if status == POSTED:
         return f"Written by {by}. Approved by <@{review['approver']}> and posted: {review.get('posted', '')}"
     if status == APPROVED:
@@ -106,10 +114,11 @@ def flyer_note(kind, review):
 
 def message_parts(event_name, kind, review, when=None):
     """(content, embed) for the review message. The embed shows the post as it will look."""
-    content = f"📝 **{KINDS[kind]} for {event_name}**\n{status_line(kind, review, when)}"
+    title = KINDS[kind] if kind == "general" else f"{KINDS[kind]} for {event_name}"
+    content = f"📝 **{title}**\n{status_line(kind, review, when)}"
     embed = discord.Embed(description=review["text"][:4096])
     if review.get("has_flyer"):
-        embed.set_image(url=f"attachment://{FLYER_FILE}")
+        embed.set_image(url=f"attachment://{review.get('image', FLYER_FILE)}")
     return content, embed
 
 async def show(bot, kind, review, when=None, view=None):
@@ -122,21 +131,25 @@ async def show(bot, kind, review, when=None, view=None):
     except discord.HTTPException as e:
         print(f"Could not update the {kind} review for {review['name']}: {e}")
 
-async def open_review(bot, event, kind, text, editor, ping=None, when=None, view_for=None, extra=None, flyer=None):
-    """Post a new review in the event's post and store it, replacing any older one.
-    view_for(gid, kind) builds the Approve / Edit buttons; flyer is the image's bytes, attached
-    so reviewers see it. Returns (review, message) or (None, why)."""
+async def open_review(bot, event, kind, text, editor, ping=None, when=None, view_for=None, extra=None,
+                      flyer=None, image_name=FLYER_FILE):
+    """Post a new review in the event's post (general announcements: the shared post) and store
+    it, replacing any older one. view_for(gid, kind) builds the Approve / Edit buttons; flyer is
+    an image's bytes, attached so reviewers see it. Returns (review, message) or (None, why)."""
     cog = bot.get_cog("Officer")
-    thread = await cog.event_post(event) if cog else None
+    if cog is None:
+        thread = None
+    else:
+        thread = await cog.general_post() if kind == "general" else await cog.event_post(event)
     if thread is None:
         return None, "There's no event-planning channel set up (NUDGE_CHANNEL_ID), so there's nowhere to review it."
     old = get(event['id'], kind)
     review = {"name": event['name'], "text": text, "editor": editor, "status": PENDING, "approver": None,
-              "flyer": event.get('flyer'), "has_flyer": bool(flyer), **(extra or {})}
+              "flyer": event.get('flyer'), "has_flyer": bool(flyer), "image": image_name, **(extra or {})}
     content, embed = message_parts(event['name'], kind, review, when)
     if ping:
         content = f"<@{ping}> {content}"
-    files = [discord.File(io.BytesIO(flyer), filename=FLYER_FILE)] if flyer else []
+    files = [discord.File(io.BytesIO(flyer), filename=image_name)] if flyer else []
     message = await thread.send(content, embed=embed, view=view_for(event['id'], kind), files=files,
                                 allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
                                                                          users=[discord.Object(ping)] if ping else False))
@@ -145,11 +158,46 @@ async def open_review(bot, event, kind, text, editor, ping=None, when=None, view
     if old and old.get("message") and old["status"] in (PENDING, APPROVED):
         try:
             await bot.get_partial_messageable(int(old["message"][0])).get_partial_message(int(old["message"][1])).edit(
-                content=f"📝 **{KINDS[kind]} for {event['name']}**\nReplaced by a newer version: {message.jump_url}",
+                content=f"📝 **{KINDS[kind]} for {old['name']}**\nReplaced by a newer version: {message.jump_url}",
                 embed=None, view=None)
         except discord.HTTPException as e:
             print(f"Could not retire the old {kind} review for {event['name']}: {e}")
     return review, message
+
+
+async def post_without_review(bot, event, kind, text, user_id, reason, image=None, image_name=FLYER_FILE):
+    """An emergency post: goes out now, and leaves a notice where it would have been reviewed,
+    saying who posted it and why. Returns (jump url, None) or (None, why it didn't post)."""
+    channel = bot.get_channel(target_channel_id(kind)) if target_channel_id(kind) else None
+    if channel is None:
+        return None, "Posting announcements is turned off right now (no announcements channel set). Nothing was posted."
+    files = [discord.File(io.BytesIO(image), filename=image_name)] if image else []
+    try:
+        posted = await channel.send(text, files=files, allowed_mentions=mentions_in(text))
+    except discord.HTTPException as e:
+        return None, f"Discord didn't accept the post ({e}). Nothing was posted; try again."
+    old = get(event['id'], kind)
+    record = {"name": event['name'], "text": text, "editor": user_id, "status": POSTED, "approver": None,
+              "posted": posted.jump_url, "emergency": reason, "has_flyer": bool(image), "image": image_name}
+    cog = bot.get_cog("Officer")
+    try:
+        thread = (await cog.general_post() if kind == "general" else await cog.event_post(event)) if cog else None
+        if thread is not None:
+            content, _ = message_parts(event['name'], kind, record)
+            notice = await thread.send(content, allowed_mentions=discord.AllowedMentions.none())
+            record["message"] = [thread.id, notice.id]
+    except discord.HTTPException as e:
+        print(f"Could not leave the emergency post notice for {event['name']}: {e}")
+    put(event['id'], kind, record)
+    if old and old.get("message") and old["status"] in (PENDING, APPROVED):
+        try:
+            await bot.get_partial_messageable(int(old["message"][0])).get_partial_message(int(old["message"][1])).edit(
+                content=f"📝 **{KINDS[kind]} for {old['name']}**\nNot needed anymore: <@{user_id}> made an emergency post "
+                        f"instead: {posted.jump_url}", embed=None, view=None)
+        except discord.HTTPException as e:
+            print(f"Could not retire the old {kind} review for {event['name']}: {e}")
+    print(f"EMERGENCY post for {event['name']} by user {user_id}, skipping review. Reason: {reason}")
+    return posted.jump_url, None
 
 
 # ---------- day-of reminders ----------

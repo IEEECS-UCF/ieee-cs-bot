@@ -547,14 +547,28 @@ class DraftView(discord.ui.View):
         self.card, self.event, self.draft, self.sent = card, event, draft, False
         self.discord_link, self.opener, self.ai = discord_link, opener, False
 
+    async def image(self, client):
+        """(bytes, file name) of the event's flyer, or (None, default name)."""
+        sync = client.get_cog("CalendarSync")
+        flyer = await sync.download_flyer(self.event.get('flyer')) if sync and self.event.get('flyer') else None
+        return flyer, review.FLYER_FILE
+
+    async def send_emergency(self, interaction, text, reason):
+        flyer, name = await self.image(interaction.client)
+        url, why = await review.post_without_review(interaction.client, self.event, "announcement", text,
+                                                    interaction.user.id, reason, flyer, name)
+        if url:
+            store.mark(self.event['id'], "announcement", "done")
+            await self.card.redraw()
+        return url, why
+
     async def send_once(self, interaction, text):
         """Open the review and return what happened. Answer the interaction first: this can take a few seconds."""
         if self.sent:
             return "Already sent for review."
         self.sent = True  # set before the await, so a double click can't send twice
         owner, _ = owner_of(self.event, store.get(self.event['id']))
-        sync = interaction.client.get_cog("CalendarSync")
-        flyer = await sync.download_flyer(self.event.get('flyer')) if sync and self.event.get('flyer') else None
+        flyer, _ = await self.image(interaction.client)
         try:
             result, message = await review.open_review(
                 interaction.client, self.event, "announcement", text, interaction.user.id,
@@ -589,6 +603,10 @@ class DraftView(discord.ui.View):
             return
         await interaction.response.send_modal(DraftEdit(self))
 
+    @discord.ui.button(label="Emergency post", style=discord.ButtonStyle.danger, row=1)
+    async def emergency(self, interaction, button):
+        await open_emergency(self, interaction)
+
     @discord.ui.button(label="Draft with AI", style=discord.ButtonStyle.secondary)
     async def with_ai(self, interaction, button):
         """Replace the draft with one Claude writes in the style of recent #announcements posts."""
@@ -599,16 +617,8 @@ class DraftView(discord.ui.View):
             await interaction.response.send_message("AI drafting isn't set up (no ANTHROPIC_API_KEY).", ephemeral=True)
             return
         await interaction.response.defer()
-        channel = interaction.client.get_channel(review.target_channel_id("announcement") or 0)
-        examples = []
-        if channel is not None:
-            async for message in channel.history(limit=100):
-                if ai_draft.is_example(message):
-                    examples.append(message.content)
-                if len(examples) >= ai_draft.EXAMPLES:
-                    break
         text, why = await ai_draft.draft(self.event, event_text.plain_description(self.event),
-                                         self.discord_link, self.opener, list(reversed(examples)))
+                                         self.discord_link, self.opener, await recent_examples(interaction.client))
         if text is None:
             await interaction.followup.send(why, ephemeral=True)
             return
@@ -617,6 +627,151 @@ class DraftView(discord.ui.View):
         await interaction.edit_original_response(
             content=f"**#announcements draft, written by Claude** (check every detail; another officer has to "
                     f"approve it before it posts)\n```md\n{text}\n```"[:2000], view=self)
+
+
+async def recent_examples(client):
+    """Recent posts by officers in #announcements, oldest first, to show Claude the house style."""
+    channel = client.get_channel(review.target_channel_id("announcement") or 0)
+    examples = []
+    if channel is not None:
+        async for message in channel.history(limit=100):
+            if ai_draft.is_example(message):
+                examples.append(message.content)
+            if len(examples) >= ai_draft.EXAMPLES:
+                break
+    return list(reversed(examples))
+
+
+# ---------- emergency posts (skip review, with a reason on record) ----------
+
+class EmergencyModal(discord.ui.Modal, title="Emergency post (skips review)"):
+    reason = discord.ui.TextInput(label="Why can't this wait for another officer?", min_length=5, max_length=300)
+
+    def __init__(self, view):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.view = view
+        self.body = discord.ui.TextInput(label="Announcement", style=discord.TextStyle.paragraph,
+                                         default=view.draft[:2000], max_length=2000)
+        self.add_item(self.body)
+
+    async def on_submit(self, interaction):
+        if self.view.sent:
+            await interaction.response.send_message("Already sent.", ephemeral=True)
+            return
+        self.view.sent = True  # set before the await, so a double submit can't post twice
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        url, why = await self.view.send_emergency(interaction, self.body.value, self.reason.value.strip())
+        if url is None:
+            self.view.sent = False
+            await interaction.followup.send(why, ephemeral=True)
+            return
+        self.view.stop()
+        await interaction.followup.send(f"Posted: {url}\nOfficers can see who posted it and why in the review post.",
+                                        ephemeral=True)
+
+async def open_emergency(view, interaction):
+    if view.sent:
+        await interaction.response.send_message("Already sent.", ephemeral=True)
+        return
+    await interaction.response.send_modal(EmergencyModal(view))
+
+
+# ---------- general announcements (/officer announce) ----------
+
+class AnnounceModal(discord.ui.Modal, title="New announcement"):
+    body = discord.ui.TextInput(label="The announcement, or notes for Claude", style=discord.TextStyle.paragraph,
+                                max_length=2000, placeholder="Write the post, or jot notes and press Draft with AI next.")
+
+    def __init__(self, image=None):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.image = image
+
+    async def on_submit(self, interaction):
+        view = GeneralDraftView(self.body.value, self.image)
+        await interaction.response.send_message(view.preview(), view=view, ephemeral=True)
+
+class GeneralDraftView(discord.ui.View):
+    """An announcement that isn't for one event. Like DraftView, it only goes out after
+    another officer approves it in the "General announcements" post."""
+    def __init__(self, draft, image=None):
+        super().__init__(timeout=VIEW_TIMEOUT)
+        self.draft, self.image, self.sent, self.ai = draft, image, False, False
+        self.gid = None
+
+    async def send_emergency(self, interaction, text, reason):
+        image = await self.image.read() if self.image else None
+        self.gid = f"general_{interaction.id}"
+        return await review.post_without_review(
+            interaction.client, {"id": self.gid, "name": "General announcement"}, "general", text,
+            interaction.user.id, reason, image, self.image.filename if self.image else review.FLYER_FILE)
+
+    def preview(self):
+        who = "written by Claude (check every detail)" if self.ai else "draft"
+        pic = f"\nImage: {self.image.filename}" if self.image else ""
+        return (f"**#announcements {who}** (another officer has to approve it before it posts)"
+                f"\n```md\n{self.draft}\n```{pic}")[:2000]
+
+    async def send_once(self, interaction, text):
+        if self.sent:
+            return "Already sent for review."
+        self.sent = True  # set before the await, so a double click can't send twice
+        try:
+            image = await self.image.read() if self.image else None
+            gid = f"general_{interaction.id}"
+            result, message = await review.open_review(
+                interaction.client, {"id": gid, "name": "General announcement"}, "general", text,
+                interaction.user.id, view_for=review_buttons, extra={"ai": self.ai and text == self.draft},
+                flyer=image, image_name=self.image.filename if self.image else review.FLYER_FILE)
+        except discord.HTTPException as e:
+            result, message = None, f"Discord didn't accept it ({e}). Try again."
+        if result is None:
+            self.sent = False
+            return message
+        self.stop()
+        print(f"General announcement sent for review by {interaction.user} ({interaction.user.id})")
+        return f"Sent for review: {message.jump_url}\nIt posts once an officer other than you approves it."
+
+    @discord.ui.button(label="Send for review", style=discord.ButtonStyle.primary)
+    async def post(self, interaction, button):
+        if self.sent:
+            await interaction.response.send_message("Already sent for review.", ephemeral=True)
+            return
+        await interaction.response.defer()
+        result = await self.send_once(interaction, self.draft)
+        if self.sent:
+            await interaction.edit_original_response(content=result, view=None)
+        else:
+            await interaction.followup.send(result, ephemeral=True)
+
+    @discord.ui.button(label="Edit, then send for review", style=discord.ButtonStyle.secondary)
+    async def edit(self, interaction, button):
+        if self.sent:
+            await interaction.response.send_message("Already sent for review.", ephemeral=True)
+            return
+        await interaction.response.send_modal(DraftEdit(self))
+
+    @discord.ui.button(label="Emergency post", style=discord.ButtonStyle.danger, row=1)
+    async def emergency(self, interaction, button):
+        await open_emergency(self, interaction)
+
+    @discord.ui.button(label="Draft with AI", style=discord.ButtonStyle.secondary)
+    async def with_ai(self, interaction, button):
+        """Treat what was typed as notes, and have Claude write the post from them."""
+        if self.sent:
+            await interaction.response.send_message("Already sent for review.", ephemeral=True)
+            return
+        if not ai_draft.configured():
+            await interaction.response.send_message("AI drafting isn't set up (no ANTHROPIC_API_KEY).", ephemeral=True)
+            return
+        await interaction.response.defer()
+        notes = getattr(self, "notes", None) or self.draft  # keep using the officer's notes on a second try
+        text, why = await ai_draft.draft_from_notes(notes, await recent_examples(interaction.client))
+        if text is None:
+            await interaction.followup.send(why, ephemeral=True)
+            return
+        self.notes, self.draft, self.ai = notes, text, True
+        print(f"AI general announcement written for {interaction.user} ({interaction.user.id})")
+        await interaction.edit_original_response(content=self.preview(), view=self)
 
 
 # ---------- posts waiting for approval ----------
@@ -644,8 +799,8 @@ async def approve(interaction, gid, kind):
     await interaction.response.defer(ephemeral=True, thinking=True)
     cog = interaction.client.get_cog("Officer")
     approved = {**current, "status": review.APPROVED, "approver": interaction.user.id}
-    if kind == "announcement":
-        channel = interaction.client.get_channel(review.target_channel_id(kind) or 0)
+    if kind in review.POSTS_NOW:
+        channel = interaction.client.get_channel(review.target_channel_id(kind)) if review.target_channel_id(kind) else None
         if channel is None:
             await interaction.followup.send("Posting announcements is turned off right now (no announcements channel set), "
                                             "so nothing was posted. It's still waiting for approval.", ephemeral=True)
@@ -658,7 +813,8 @@ async def approve(interaction, gid, kind):
             await interaction.followup.send(f"Discord didn't accept the post ({e}). Nothing was posted; try again.", ephemeral=True)
             return
         approved.update(status=review.POSTED, posted=posted.jump_url)
-        store.mark(gid, "announcement", "done")
+        if kind == "announcement":
+            store.mark(gid, "announcement", "done")
         reply = f"Posted: {posted.jump_url}"
     else:
         reply = f"Approved. It posts {review_when(cog, gid, kind) or 'on the day of the event'}."
@@ -689,7 +845,7 @@ class ReviewEdit(discord.ui.Modal):
                           view=review_buttons(self.gid, self.kind))
 
 class ReviewButton(discord.ui.DynamicItem[discord.ui.Button],
-                   template=r'review:(?P<action>approve|edit):(?P<kind>announcement|reminder):(?P<gid>[A-Za-z0-9_]+)'):
+                   template=r'review:(?P<action>approve|edit):(?P<kind>announcement|reminder|general):(?P<gid>[A-Za-z0-9_]+)'):
     """Approve or Edit on a post waiting for review. Works after restarts; checks the officer role."""
     def __init__(self, action, kind, gid):
         label, style = ("Approve", discord.ButtonStyle.success) if action == "approve" else ("Edit", discord.ButtonStyle.secondary)

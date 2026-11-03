@@ -41,7 +41,8 @@ def client(thread, channel=None, flyer=None):
         return thread
     async def download_flyer(url):
         return flyer
-    cog = types.SimpleNamespace(event_post=event_post, cache=types.SimpleNamespace(snapshot=None))
+    cog = types.SimpleNamespace(event_post=event_post, general_post=lambda: event_post(None),
+                                cache=types.SimpleNamespace(snapshot=None))
     sync = types.SimpleNamespace(download_flyer=download_flyer)
     return types.SimpleNamespace(get_cog=lambda name: sync if name == "CalendarSync" else cog,
                                  get_partial_messageable=lambda tid: thread, get_channel=lambda cid: channel)
@@ -256,7 +257,100 @@ def test_ai_examples_are_officers_own_posts():
     bot_post = types.SimpleNamespace(author=types.SimpleNamespace(bot=True), content="x" * 100)
     short = types.SimpleNamespace(author=types.SimpleNamespace(bot=False), content="hi")
     assert [ai_draft.is_example(m) for m in (person, bot_post, short)] == [True, False, False]
-    examples, details = ai_draft.prompt(event(), "Learn bash.", "https://d/1", "<@&111>", ["Example post"])
+    examples, details = ai_draft.prompt(["Example post"], ai_draft.details(event(), "Learn bash.", "https://d/1", "<@&111>"))
     assert "Example post" in examples["text"] and examples["cache_control"] == {"type": "ephemeral"}
     assert "Open with this mention: <@&111>" in details["text"] and "Room: ENG2 205" in details["text"]
     assert "cache_control" not in details                       # only the stable part is cached
+
+
+# ---------- general announcements (/officer announce) ----------
+
+class Image:
+    filename = "poster.jpg"
+    async def read(self):
+        return b"jpg"
+
+async def test_a_general_announcement_needs_another_officer_too(monkeypatch):
+    monkeypatch.setenv("ANNOUNCE_CHANNEL_ID", "9")
+    thread, channel = Thread(), Channel()
+    bot = client(thread, channel)
+    view = views.GeneralDraftView("Office hours moved to Friday!", Image())
+    me = Interaction(AUTHOR, bot)
+    me.id = 555
+    assert (await view.send_once(me, view.draft)).startswith("Sent for review:")
+    assert channel.posts == [] and thread.files == ["poster.jpg"]
+    assert thread.sent[0][0].startswith("📝 **General announcement**")
+    assert thread.sent[0][1].image.url == "attachment://poster.jpg"
+    saved = review.get("general_555", "general")
+    assert saved["status"] == review.PENDING and saved["editor"] == AUTHOR
+    mine = Interaction(AUTHOR, bot)
+    await views.approve(mine, "general_555", "general")
+    assert "another officer" in mine.said[0] and channel.posts == []
+    await views.approve(Interaction(OTHER, bot, attachments=[Attachment()]), "general_555", "general")
+    assert channel.posts == ["Office hours moved to Friday!"] and channel.files == [["flyer-file"]]
+    assert "marks" not in EventStore().get("general_555")             # not an event's announcement step
+
+async def test_ai_writes_a_general_announcement_from_notes(monkeypatch):
+    from bot.utils import ai_draft
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    notes_seen = []
+    async def fake(notes, examples):
+        notes_seen.append(notes)
+        return f"Post #{len(notes_seen)}", None
+    monkeypatch.setattr(ai_draft, "draft_from_notes", fake)
+    class Response:
+        async def defer(self):
+            pass
+    shown = []
+    async def edit_original_response(content, view):
+        shown.append(content)
+    interaction = types.SimpleNamespace(response=Response(), edit_original_response=edit_original_response,
+                                        client=types.SimpleNamespace(get_channel=lambda cid: None),
+                                        user=types.SimpleNamespace(id=AUTHOR))
+    view = views.GeneralDraftView("gbm moved to thu, bring laptops")
+    await view.with_ai.callback(interaction)
+    await view.with_ai.callback(interaction)                          # try again: same notes, not the last draft
+    assert notes_seen == ["gbm moved to thu, bring laptops"] * 2 and view.draft == "Post #2" and view.ai
+    assert "written by Claude" in shown[-1]
+    assert "Office" not in ai_draft.from_notes("gbm moved") and "gbm moved" in ai_draft.from_notes("gbm moved")
+
+
+# ---------- emergency posts ----------
+
+async def test_an_emergency_post_goes_out_now_and_leaves_a_record(monkeypatch):
+    monkeypatch.setenv("ANNOUNCE_CHANNEL_ID", "9")
+    thread, channel = Thread(), Channel()
+    bot = client(thread, channel, flyer=b"png")
+    async def redraw(fresh=False):
+        pass
+    await review.open_review(bot, event(), "announcement", "Old draft", OTHER, view_for=views.review_buttons)
+    draft = views.DraftView(types.SimpleNamespace(redraw=redraw), event(), "Room changed to ENG1 101!")
+    url, why = await draft.send_emergency(Interaction(AUTHOR, bot), "Room changed to ENG1 101!", "Room moved an hour before")
+    assert url and channel.posts == ["Room changed to ENG1 101!"] and len(channel.files[0]) == 1
+    notice = thread.sent[-1][0]
+    assert "🚨 Posted by <@1> without review" in notice and "Room moved an hour before" in notice
+    saved = review.get("g1", "announcement")
+    assert saved["status"] == review.POSTED and saved["emergency"] == "Room moved an hour before"
+    assert EventStore().get("g1")["marks"]["announcement"] == "done"
+    assert any("Not needed anymore" in kw.get("content", "") for _, kw in thread.edits)   # old review retired
+
+async def test_an_emergency_general_post(monkeypatch):
+    monkeypatch.setenv("ANNOUNCE_CHANNEL_ID", "9")
+    thread, channel = Thread(), Channel()
+    bot = client(thread, channel)
+    view = views.GeneralDraftView("Building closed today, meeting is on Discord", Image())
+    me = Interaction(AUTHOR, bot)
+    me.id = 777
+    url, why = await view.send_emergency(me, view.draft, "Campus closure")
+    assert url and channel.posts == ["Building closed today, meeting is on Discord"]
+    assert review.get("general_777", "general")["emergency"] == "Campus closure"
+    assert "Campus closure" in thread.sent[-1][0]
+
+async def test_nothing_posts_in_an_emergency_while_posting_is_off(monkeypatch):
+    monkeypatch.delenv("ANNOUNCE_CHANNEL_ID", raising=False)
+    monkeypatch.delenv("REMINDER_CHANNEL_ID", raising=False)
+    view = views.GeneralDraftView("x")
+    me = Interaction(AUTHOR, client(Thread(), Channel()))
+    me.id = 1
+    url, why = await view.send_emergency(me, "x", "because")
+    assert url is None and "turned off" in why

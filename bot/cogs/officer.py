@@ -13,7 +13,8 @@ from bot.officer import render, members, metrics, tabling
 from bot.officer.data import (EventStore, migrate, load_json, save_json, NUDGES_FILE, DIGEST_STATE_FILE)
 from bot.officer.sources import TZ, SnapshotCache, fetch_tabling, TablingSheetError, TABLING_SHEET_ID
 from bot.officer.steps import event_steps, problems, owner_of
-from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton, ReviewButton, open_card, open_buttons,
+from bot.officer.views import (BoardView, CardView, ChapterView, OpenEventButton, ReviewButton, AnnounceModal,
+                               open_card, open_buttons,
                                OFFICER_ROLE_IDS)
 
 # The officer tools, built around one idea: every event has a status (its
@@ -66,6 +67,7 @@ def forum_tag(tags, event):
     want = FORUM_TAGS.get(event_text.kind(event), 'general')
     return by_name.get(want) or by_name.get('general') or next(iter(tags), None)
 
+GENERAL_POST = "General announcements"
 POST_LOOKBACK_DAYS = 90  # archived posts older than this belong to some earlier event
 
 def matching_post(threads, names):
@@ -162,6 +164,14 @@ class Officer(commands.Cog):
     @app_commands.autocomplete(event=event_autocomplete)
     async def event_cmd(self, interaction: discord.Interaction, event: str):
         await open_card(self, interaction, event)
+
+    @officer.command(name="announce", description="Write an #announcements post. Another officer approves it before it posts.")
+    @app_commands.describe(image="An image to post with it (optional)")
+    async def announce_cmd(self, interaction: discord.Interaction, image: discord.Attachment = None):
+        if image is not None and not (image.content_type or "").startswith("image/"):
+            await interaction.response.send_message("That attachment isn't an image.", ephemeral=True)
+            return
+        await interaction.response.send_modal(AnnounceModal(image))
 
     @officer.command(name="chapter", description="Deadlines, tabling, volunteer tasks, members and the monthly report.")
     async def chapter_cmd(self, interaction: discord.Interaction):
@@ -516,6 +526,40 @@ class Officer(commands.Cog):
             msg_id = (await thread.send(content, view=view, allowed_mentions=discord.AllowedMentions.none())).id
         state["status"][gid] = {"id": msg_id, "text": text}
         save_json(NUDGES_FILE, state)
+
+    async def general_post(self):
+        """The "General announcements" post in the nudge channel, where announcements that
+        aren't for one event wait for approval. Created on first use; None without a nudge channel."""
+        channel = self.bot.get_channel(self.nudge_channel_id) if self.nudge_channel_id else None
+        if channel is None:
+            return None
+        state = load_json(NUDGES_FILE, {"sent": {}, "threads": {}, "day": None})
+        if state.get("general"):
+            try:
+                thread = self.bot.get_channel(int(state["general"])) or await self.bot.fetch_channel(int(state["general"]))
+                if getattr(thread, 'archived', False):
+                    await thread.edit(archived=False)
+                return thread
+            except discord.HTTPException:
+                pass
+        thread = matching_post(await recent_posts(channel), (GENERAL_POST,))
+        if thread is not None:
+            if thread.archived:
+                await thread.edit(archived=False)
+        elif isinstance(channel, discord.ForumChannel):
+            tags = channel.available_tags
+            tag = next((t for t in tags if t.name.casefold() == 'general'), next(iter(tags), None))
+            created = await channel.create_thread(
+                name=GENERAL_POST, applied_tags=[tag] if tag else [],
+                content="Announcements that aren't for one event wait here until another officer approves them.")
+            thread = created.thread
+        else:
+            starter = await channel.send(f"📌 **{GENERAL_POST}**: announcements that aren't for one event wait in this thread.")
+            thread = await starter.create_thread(name=GENERAL_POST)
+        state = load_json(NUDGES_FILE, {"sent": {}, "threads": {}, "day": None})
+        state["general"] = thread.id
+        save_json(NUDGES_FILE, state)
+        return thread
 
     async def event_post(self, event):
         """The event's post in the nudge channel (created if needed), or None if there's no nudge channel."""

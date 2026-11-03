@@ -2,9 +2,10 @@ import os
 
 import anthropic
 
-# "Draft with AI" on an event card: Claude writes an #announcements post from
-# the event's details, in the style of recent posts by officers. The draft
-# still goes through officer review like any other (bot/officer/review.py).
+# "Draft with AI": Claude writes an #announcements post, from an event's details
+# (event card) or an officer's notes (/officer announce), in the style of recent
+# posts by officers. The draft still goes through officer review like any other
+# (bot/officer/review.py).
 
 MODEL = "claude-sonnet-5-5"
 EXAMPLES = 12          # recent officer posts shown as the house style
@@ -17,6 +18,7 @@ Rules:
 - Use only the facts in the event details. Never invent speakers, food, prizes, prerequisites or anything else.
 - If the event has no description, write one short, general sentence about the event from its name, and nothing more specific.
 - Copy the date, time, room, link and opening mention exactly as given.
+- When writing from an officer's notes instead of an event, use only what the notes say, and don't add @everyone or any role mention unless the notes include it.
 - Reply with the post text only, ready to paste into Discord. No preamble, no code fences."""
 
 def configured():
@@ -26,14 +28,17 @@ def is_example(message):
     """A past announcement written by a person, long enough to show the style."""
     return not message.author.bot and len(message.content) >= EXAMPLE_MIN_CHARS
 
-def prompt(event, description, discord_link, opener, examples):
+def prompt(examples, ask):
     """The user turn: the example posts first (cached, since they rarely change between
-    drafts), then this event's details."""
+    drafts), then what to write."""
     shown = "\n\n".join(f"<example>\n{text}\n</example>" for text in examples) or "(none yet)"
     return [
         {"type": "text", "text": f"Recent posts in #announcements:\n{shown}", "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": details(event, description, discord_link, opener)},
+        {"type": "text", "text": ask},
     ]
+
+def from_notes(notes):
+    return f"Write an announcement from these notes by an officer:\n<notes>\n{notes}\n</notes>"
 
 def details(event, description, discord_link, opener):
     return (f"Write the announcement for this event:\n"
@@ -46,7 +51,14 @@ def details(event, description, discord_link, opener):
             f"Open with this mention: {opener}")
 
 async def draft(event, description, discord_link, opener, examples):
-    """(text, None) or (None, why it failed)."""
+    """An event's announcement: (text, None) or (None, why it failed)."""
+    return await write(prompt(examples, details(event, description, discord_link, opener)))
+
+async def draft_from_notes(notes, examples):
+    """A general announcement from an officer's notes: (text, None) or (None, why it failed)."""
+    return await write(prompt(examples, from_notes(notes)))
+
+async def write(content):
     client = anthropic.AsyncAnthropic()
     try:
         response = await client.beta.messages.create(
@@ -56,7 +68,7 @@ async def draft(event, description, discord_link, opener, examples):
             betas=["server-side-fallback-2026-07-01"],
             fallbacks="default",
             system=SYSTEM,
-            messages=[{"role": "user", "content": prompt(event, description, discord_link, opener, examples)}],
+            messages=[{"role": "user", "content": content}],
         )
         u = response.usage
         print(f"AI draft usage: {u.input_tokens} new + {u.cache_read_input_tokens or 0} cached + "
