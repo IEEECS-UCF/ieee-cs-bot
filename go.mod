@@ -7,6 +7,7 @@ require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/joho/godotenv v1.5.1
 	golang.org/x/net v0.62.0
+	golang.org/x/oauth2 v0.37.0
 	google.golang.org/api v0.310.0
 	modernc.org/sqlite v1.61.1
 	rsc.io/qr v0.2.0
@@ -46,7 +47,6 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.yaml.in/yaml/v4 v4.0.0-rc.2 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
