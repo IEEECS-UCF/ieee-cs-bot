@@ -99,3 +99,90 @@ so run it from a directory laid out like the repo.
 
 One new, optional variable: `COMMAND_GUILD_ID`. When set, slash commands are
 registered on that guild only (they show up at once) instead of globally.
+
+## Status
+
+Everything in `bot/` is ported, including the Drive and Notion tools for
+`/officer ask` from main @ fe7df9d (merged into this branch):
+
+- Calendar sync (both directions, weekly summary, flyer covers, the
+  deletion cap), day-of reminders with review, `/officer events|event|chapter|announce|ask`,
+  the board, cards, pickers and modals, reviews and emergency posts, the digest,
+  nudge forum posts with edited status messages, monthly metrics, tabling
+  reminders, `/member verify|status` with officer review, the job feed and all
+  its sources, the volunteer board, `/socials` and `/info`.
+- `/officer ask`: Claude Sonnet 5.5 at low effort with every tool, confirm-before-change,
+  the FTS5 knowledge cache of Discord, Drive and Notion.
+- Tests: about 220 Go tests, ported case by case from `tests/*.py` plus new
+  ones (regex rewrites checked against Python's results, JSON round trips,
+  a startup smoke test that sets up every cog and checks the slash commands
+  match the Python bot's). `go test -race ./...` passes. No test touches the network.
+
+Not done yet:
+
+- **Never run against real Discord, Google, Claude or Notion.** Everything is
+  tested through fakes. The first run on a test guild is the real test,
+  especially modals, editing ephemeral messages later, scheduled-event cover
+  images, member chunking and the forum posts.
+- **CPU and memory not measured.** The reason for the port (a history re-read
+  pinning a core at about 145 MB) needs a side-by-side run to confirm.
+- No systemd unit or deploy-script change; `deploy.yml` still deploys the Python bot.
+- `scripts/drive_login.py` stays Python. It's a one-time sign-in, and the Go bot
+  reads the token file it writes.
+
+Differences worth knowing (details in the commit messages):
+
+- Expired or pre-restart ephemeral menus answer "This menu has expired" instead
+  of Discord's "interaction failed".
+- `tasks.loop` stops for good after an uncaught exception; Go loops alert and keep going.
+- JSON files come out with keys in sorted order and non-ASCII written as UTF-8
+  (Python wrote insertion order and `\u` escapes). Same data; either bot reads
+  the other's files. Unknown keys in records are kept.
+- Regexes: Go's RE2 has no lookaround, so the few that used it are hand-written
+  functions, and casefold is `strings.ToLower`.
+- Confirming a room also calls a calendar sync 5 s later, so the new location
+  reaches Discord sooner.
+- Dates in the new-event form are read by a hand-written parser instead of
+  dateutil. It covers the formats officers type (11/20, 2026-11-20, Nov 20, Fri Nov 20th...).
+
+## Running it side by side with the Python bot
+
+Never run both bots on the production token at the same time: both would
+answer every interaction and run every loop, so posts and calendar writes would
+double up. Test with a second Discord application on a test guild.
+
+1. In the Discord Developer Portal, create a new application (for example "IEEE CS
+   Bot (Go test)"). Turn on the Message Content and Server Members intents, and
+   invite it to a test guild with the same permissions as the real bot.
+2. Make a test copy of the guild's setup: an events channel, a nudge forum,
+   an announcements channel, a reminders channel, an alert channel, officer roles.
+3. **Use a separate Google Calendar.** Sync is two-way, and deleting a Discord
+   event deletes the calendar event. Create a test calendar and share it with
+   the service account (writer), or share the real one read-only. With only
+   reader access, the bot never writes back.
+4. Make a separate directory with a test env file. Don't edit `/etc/ieee-bot.env`.
+   ```bash
+   mkdir -p ~/go-test/{data,cache,credentials,bot}
+   cp bot/deadlines.json ~/go-test/bot/
+   cp credentials/google_service.json ~/go-test/credentials/
+   ```
+   The test `~/go-test/.env` uses the same variable names with test values:
+   `DISCORD_TOKEN` (test app), `GUILD_ID` plus every `*_CHANNEL_ID` / `*_ROLE_ID`
+   from the test guild, `OFFICER_ROLE_IDS`, `GOOGLE_CALENDAR_ID` (test
+   calendar), `MEMBERS_INTENT=1`, and `COMMAND_GUILD_ID=<test guild>` so
+   commands show up at once. Leave `CHECKIN_URL`, `NOTION_TOKEN` and
+   `credentials/drive_user.json` out at first: those reach the chapter's real
+   forms, Notion and Drive. Add them when you want to test those features, and
+   only confirm changes you'd be fine with for real.
+5. Build and run it from that directory:
+   ```bash
+   go build -o ~/go-test/ieee-bot-go ./cmd/ieee-bot && cd ~/go-test && ./ieee-bot-go
+   ```
+6. To compare with the Python bot, point the Python bot at the same test env
+   in another directory, and run one bot at a time against the test guild.
+   To compare resource use, run each through a full knowledge-cache back-fill
+   (delete `cache/knowledge.db`) and watch `ps -o rss,pcpu`.
+
+Before any switch in production: run it on the test guild for a while, then
+plan the cutover separately. That means a systemd unit change, a deploy.yml
+change, and a copy of the real `data/` taken while the Python bot is stopped.
