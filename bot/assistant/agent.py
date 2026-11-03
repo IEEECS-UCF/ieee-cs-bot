@@ -14,12 +14,13 @@ from bot.officer.steps import event_steps, owner_of, problems, no_room
 from bot.utils import event_text
 from bot.utils.gcal_client import patch_event
 from bot.utils.event_text import same_place
+from bot.assistant.tools_files import FileTools, FILE_TOOLS
 
-# /officer ask: Claude answers an officer's question from the knowledge cache and
-# the event data, and can line up changes to events. Read tools run right away.
-# Change tools only queue a Change: nothing happens until the officer who asked
-# clicks Confirm under the reply (bot/cogs/assistant.py). Public posts still go
-# through officer review.
+# /officer ask: Claude answers an officer's question from the knowledge cache,
+# the event data, Google Drive and Notion, and can line up changes to events,
+# Drive and Notion (tools_files.py). Read tools run right away. Change tools only
+# queue a Change: nothing happens until the officer who asked clicks Confirm
+# under the reply (bot/cogs/assistant.py). Public posts still go through officer review.
 
 MODEL = "claude-sonnet-5-5"
 MAX_TURNS = 10
@@ -28,25 +29,27 @@ STEPS = {"description": "Description", "flyer": "Flyer", "announcement": "Announ
 store = EventStore()
 
 SYSTEM = """You are the officer assistant for the IEEE Computer Society student chapter at UCF, inside its Discord server.
-Officers ask you questions about the chapter, or ask you to change details of events.
+Officers ask you questions about the chapter, or ask you to change things: events, the chapter's Google Drive (ieeecsucf@gmail.com: files, folders, Docs, Sheets) and its Notion (pages and databases).
 
 Questions:
-- Search the knowledge cache before answering anything factual. It holds the server's Discord messages and the chapter's Notion pages. Search again with other words if the first results miss.
+- Search the knowledge cache before answering anything factual. It holds the server's Discord messages, the chapter's Drive documents and its Notion pages. Search again with other words if the first results miss. Use the Drive and Notion tools to read a file or page in full.
 - Answer from what you found and link the messages or docs you used. If you can't find it, say so; don't guess.
 
 Changes:
-- Find the event first with list_events, then call the change tool. Ask instead of guessing when the event or the change is unclear.
+- Find what you're changing first (list_events, search_drive, search_notion, find_discord_files), then call the change tool. Ask instead of guessing when the target or the change is unclear, e.g. when two folders could match.
+- To file something someone posted, find the message with find_discord_files, then save_discord_file_to_drive or add_discord_file_to_notion.
 - Change tools don't change anything themselves. They queue the change, and it only happens when the officer who asked clicks Confirm under your reply. So describe what will change; never say it's done.
+- Deleting only moves things to Drive's or Notion's trash, where they can be restored.
 - "Set the room" means the room is confirmed, unless they say it's only requested.
 - You can't post publicly. Announcements go to other officers for review with send_announcement_for_review.
 
 Your reply is posted as a Discord message in an officer channel. Keep it short and plain, use Discord markdown, and write people's names instead of @mentions."""
 
 TOOLS = [
-    {"name": "search", "description": "Full-text search of the knowledge cache: Discord messages and Notion pages. Returns the best matches with links.",
+    {"name": "search", "description": "Full-text search of the knowledge cache: Discord messages, Drive documents and Notion pages. Returns the best matches with links.",
      "input_schema": {"type": "object", "properties": {
          "query": {"type": "string", "description": "Words to search for"},
-         "source": {"type": "string", "enum": ["any", "discord", "notion"]},
+         "source": {"type": "string", "enum": ["any", "discord", "drive", "notion"]},
          "limit": {"type": "integer", "minimum": 1, "maximum": 20}}, "required": ["query"]}},
     {"name": "read_discord_context", "description": "The messages around one Discord message, to see the whole conversation. Pass a message link from search results.",
      "input_schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}},
@@ -80,7 +83,8 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"text": {"type": "string"}, "event_id": {"type": "string"}},
                       "required": ["text"]}},
 ]
-TOOLS[-1]["cache_control"] = {"type": "ephemeral"}  # tools and system prompt never change: cache them
+TOOLS += FILE_TOOLS
+TOOLS[-1] = {**TOOLS[-1], "cache_control": {"type": "ephemeral"}}  # tools and system prompt never change: cache them
 
 
 @dataclass
@@ -90,11 +94,12 @@ class Change:
 
 
 @dataclass
-class Ask:
+class Ask(FileTools):
     bot: object
     guild: object
     asker: object
     knowledge: object
+    channel: object = None
     changes: list = field(default_factory=list)
     usage: dict = field(default_factory=lambda: {"input": 0, "cached": 0, "cache_write": 0, "output": 0})
 
