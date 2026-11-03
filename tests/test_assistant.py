@@ -30,6 +30,13 @@ def test_search_finds_ranks_and_filters():
     assert len(k.search("CECS office")) == 0 and k.search("25Live")[0]["place"] == "Room booking guide"
     assert k.counts() == {"discord": 1, "notion": 1}
 
+def test_a_damaged_cache_starts_fresh():
+    with open("data/bad.db", "wb") as f:
+        f.write(b"SQLite format 3\x00" + b"garbage" * 500)
+    k = Knowledge("data/bad.db")
+    k.put("discord:1", "discord", "#x", "a", "2026-11-01", "u", "works again")
+    assert k.search("works")[0]["url"] == "u"
+
 def test_query_and_chunks():
     assert fts_query("Where's the GPU kernels repo?") == '"where" OR "the" OR "gpu" OR "kernels" OR "repo"'
     parts = chunks("x" * 3500)

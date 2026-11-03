@@ -1,18 +1,22 @@
+import os
 import re
 import sqlite3
 import threading
 
 # The knowledge cache /officer ask searches: every Discord message the bot can
 # read, plus Notion pages shared with the bot, in one SQLite full-text index
-# (data/knowledge.db). Discord messages are one entry each; Notion pages are
+# (cache/knowledge.db). Discord messages are one entry each; Notion pages are
 # split into overlapping chunks. Nothing is excluded.
+# It lives outside data/ because deploys copy data/ aside and back while the bot
+# runs, which corrupts a live SQLite file. It's only a cache: if it's ever
+# damaged, it's started fresh and the bot reads everything again.
 #
 #   key     "discord:<message id>", "notion:<page id>:<n>"
 #   source  discord | notion
 #   place   "#channel", "#forum › post", a document's title
 #   meta    small key/value table: last message id per channel, modified times
 
-DB_FILE = "data/knowledge.db"
+DB_FILE = "cache/knowledge.db"
 CHUNK = 1500
 OVERLAP = 200
 SOURCES = ("discord", "notion")
@@ -21,7 +25,15 @@ _lock = threading.Lock()
 
 class Knowledge:
     def __init__(self, path=DB_FILE):
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         self.db = sqlite3.connect(path, check_same_thread=False)
+        if not healthy(self.db):
+            self.db.close()
+            for leftover in (path, path + "-journal", path + "-wal", path + "-shm"):
+                if os.path.exists(leftover):
+                    os.remove(leftover)
+            print(f"ERROR: {path} was damaged; started a fresh knowledge cache (it fills again on its own).")
+            self.db = sqlite3.connect(path, check_same_thread=False)
         with _lock, self.db:
             self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5("
                             "key UNINDEXED, source UNINDEXED, place, author, ts UNINDEXED, url UNINDEXED, text, "
@@ -87,6 +99,12 @@ class Knowledge:
     def counts(self):
         return dict(self.db.execute("SELECT source, count(*) FROM docs GROUP BY source").fetchall())
 
+
+def healthy(db):
+    try:
+        return db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    except sqlite3.DatabaseError:
+        return False
 
 def fts_query(text):
     """Plain words OR'd together, so punctuation can't break FTS5's query syntax; bm25 ranks
