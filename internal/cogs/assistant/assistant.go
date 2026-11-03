@@ -6,6 +6,8 @@
 //	Drive and Notion: refreshed every few hours; only changed documents are re-read.
 //
 // Replies are public, so /officer ask only runs in channels members can't see.
+// Officers can reply to an answer to follow up (followups.go); anyone else's
+// reply is ignored.
 // (bot/cogs/assistant.py)
 package assistant
 
@@ -89,6 +91,7 @@ type Cog struct {
 	// Events gives /officer ask the officer tools' event data; the officer
 	// cog sets it.
 	Events assistant.Events
+	convos conversations
 }
 
 func Setup(b *botkit.Bot) {
@@ -97,7 +100,7 @@ func Setup(b *botkit.Bot) {
 		log.Printf("Failed to load extension assistant: %v", err)
 		return
 	}
-	c := &Cog{bot: b, guildID: botkit.GuildID(), knowledge: k}
+	c := &Cog{bot: b, guildID: botkit.GuildID(), knowledge: k, convos: conversations{byMessage: map[string]*conversation{}}}
 	b.AddCog(cogapi.AssistantName, c)
 	b.Loop("Knowledge cache (Discord)", CatchUpHours*time.Hour, func() {
 		if err := c.indexGuild(); err != nil {
@@ -274,6 +277,7 @@ func (c *Cog) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.GuildID != c.guildID {
 		return
 	}
+	c.maybeFollowUp(m)
 	if row, ok := Entry(c.message(m.Message, c.bot.Channel(m.ChannelID))); ok {
 		c.knowledge.Put(row)
 	}
@@ -432,26 +436,9 @@ func (c *Cog) Ask(ctx *botkit.Ctx, question string) {
 	run := &assistant.Ask{Bot: c.bot, GuildID: ctx.I.GuildID, AskerID: ctx.UserID(), AskerName: name,
 		Knowledge: c.knowledge, ChannelID: ctx.I.ChannelID, Events: c.Events}
 	answer := run.Run(context.Background(), question)
-	u := run.Usage
-	log.Printf("/officer ask by %s (%s): %d new + %d cached + %d cache-write input tokens, %d output, %d changes queued",
-		user.Username, user.ID, u.Input, u.Cached, u.CacheWrite, u.Output, len(run.Changes))
-	head := []rune(fmt.Sprintf("> %s\n%s", botkit.Cut(question, 300), answer))
-	var pieces []string
-	for i := 0; i < len(head); i += 2000 {
-		pieces = append(pieces, string(head[i:min(i+2000, len(head))]))
-	}
-	if len(pieces) == 0 {
-		pieces = []string{"(no answer)"}
-	}
-	var confirm *confirmChanges
-	if len(run.Changes) > 0 {
-		var listed []string
-		for n, ch := range run.Changes {
-			listed = append(listed, fmt.Sprintf("%d. %s", n+1, ch.Summary))
-		}
-		pieces = append(pieces, botkit.Cut(fmt.Sprintf("**Waiting for %s to confirm:**\n%s", name, strings.Join(listed, "\n")), 2000))
-		confirm = newConfirm(c.bot, ctx.UserID(), run.Changes)
-	}
+	logUsage("/officer ask", user, run)
+	convo := c.convos.start(run, ctx.I.ChannelID)
+	pieces, confirm := c.answerPieces(fmt.Sprintf("> %s\n%s", botkit.Cut(question, 300), answer), run, name)
 	for n, piece := range pieces {
 		reply := botkit.Reply{Content: piece, Mentions: botkit.NoMentions()}
 		last := n == len(pieces)-1
@@ -463,10 +450,39 @@ func (c *Cog) Ask(ctx *botkit.Ctx, question string) {
 			log.Printf("/officer ask: couldn't post the answer: %v", err)
 			return
 		}
+		c.convos.remember(msg.ID, convo)
 		if last && confirm != nil {
 			confirm.message = c.bot.ChannelMsg(msg.ChannelID, msg.ID)
 		}
 	}
+}
+
+func logUsage(what string, user *discordgo.User, run *assistant.Ask) {
+	u := run.Usage
+	log.Printf("%s by %s (%s): %d new + %d cached + %d cache-write input tokens, %d output, %d changes queued",
+		what, user.Username, user.ID, u.Input, u.Cached, u.CacheWrite, u.Output, len(run.Changes))
+}
+
+// answerPieces splits an answer into Discord-sized messages, plus a "waiting
+// for you to confirm" message (with its buttons) if changes were queued.
+func (c *Cog) answerPieces(text string, run *assistant.Ask, name string) ([]string, *confirmChanges) {
+	runes := []rune(text)
+	var pieces []string
+	for i := 0; i < len(runes); i += 2000 {
+		pieces = append(pieces, string(runes[i:min(i+2000, len(runes))]))
+	}
+	if len(pieces) == 0 {
+		pieces = []string{"(no answer)"}
+	}
+	if len(run.Changes) == 0 {
+		return pieces, nil
+	}
+	var listed []string
+	for n, ch := range run.Changes {
+		listed = append(listed, fmt.Sprintf("%d. %s", n+1, ch.Summary))
+	}
+	pieces = append(pieces, botkit.Cut(fmt.Sprintf("**Waiting for %s to confirm:**\n%s", name, strings.Join(listed, "\n")), 2000))
+	return pieces, newConfirm(c.bot, run.AskerID, run.Changes)
 }
 
 // confirmChanges is Confirm or Cancel for the changes /officer ask queued.

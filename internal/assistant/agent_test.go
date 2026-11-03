@@ -210,3 +210,59 @@ func TestToolsAreCachedAndInOrder(t *testing.T) {
 		t.Error("tool list")
 	}
 }
+
+func TestFollowUpsContinueTheConversation(t *testing.T) {
+	testutil.Setup(t)
+	a, _ := makeAsk(t)
+	end := func(id, text string) *anthropic.BetaMessage {
+		return message(t, `{"id": "`+id+`", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "stop_reason": "end_turn",
+			"content": [{"type": "text", "text": "`+text+`"}], "usage": {"input_tokens": 1, "output_tokens": 1}}`)
+	}
+	replies := []*anthropic.BetaMessage{end("m1", "The Vulkan room is TBA."), end("m2", "I'd ask CECS for ENG2 205.")}
+	var sent []anthropic.BetaMessageNewParams
+	old := NewMessage
+	NewMessage = func(_ context.Context, p anthropic.BetaMessageNewParams) (*anthropic.BetaMessage, error) {
+		sent = append(sent, p)
+		r := replies[0]
+		replies = replies[1:]
+		return r, nil
+	}
+	defer func() { NewMessage = old }()
+
+	a.Run(context.Background(), "where is vulkan?")
+	if len(a.History) != 2 { // the question and the answer
+		t.Fatalf("history after the first answer: %d", len(a.History))
+	}
+	first := a.History
+	a.AskerName = "Sam"
+	answer := a.FollowUp(context.Background(), "what room should we ask for?", "https://discord.com/channels/1/2/3", []string{"floorplan.png"})
+	if answer != "I'd ask CECS for ENG2 205." || len(a.History) != 4 {
+		t.Fatalf("%q %d", answer, len(a.History))
+	}
+	if len(sent[1].Messages) != 3 { // the earlier question and answer, then the follow-up
+		t.Fatalf("follow-up sent %d messages", len(sent[1].Messages))
+	}
+	raw, _ := json.Marshal(sent[1].Messages[2])
+	for _, want := range []string{"Follow-up from Sam", "https://discord.com/channels/1/2/3", "floorplan.png", "what room should we ask for?"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("follow-up message missing %q: %s", want, raw)
+		}
+	}
+	if len(first) != 2 { // the stored conversation wasn't written into
+		t.Error("earlier history changed")
+	}
+}
+
+func TestAFailedTurnCantBeContinued(t *testing.T) {
+	testutil.Setup(t)
+	a, _ := makeAsk(t)
+	old := NewMessage
+	NewMessage = func(context.Context, anthropic.BetaMessageNewParams) (*anthropic.BetaMessage, error) {
+		return nil, fmt.Errorf("boom")
+	}
+	defer func() { NewMessage = old }()
+	a.Run(context.Background(), "hi")
+	if a.History != nil {
+		t.Error("a failed turn left a conversation to continue")
+	}
+}

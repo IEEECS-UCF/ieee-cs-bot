@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -22,7 +23,8 @@ import (
 // events, Drive and Notion (tools_files.go). Read tools run right away. Change
 // tools only queue a Change: nothing happens until the officer who asked
 // clicks Confirm under the reply (internal/cogs/assistant). Public posts still
-// go through officer review.
+// go through officer review. Officers can reply to an answer to follow up: the
+// conversation so far (History) is sent again, append-only, with the reply.
 
 const (
 	Model    = anthropic.ModelClaudeSonnet5_5
@@ -49,6 +51,10 @@ Changes:
 - Deleting only moves things to Drive's or Notion's trash, where they can be restored.
 - "Set the room" means the room is confirmed, unless they say it's only requested.
 - You can't post publicly. Announcements go to other officers for review with send_announcement_for_review.
+
+Follow-ups:
+- Officers can reply to your answers to follow up, and each follow-up says who wrote it. Several officers may join one conversation.
+- Changes you queue in a follow-up are confirmed by the officer who wrote that follow-up.
 
 Your reply is posted as a Discord message in an officer channel. Keep it short and plain, use Discord markdown, and write people's names instead of @mentions.`
 
@@ -126,6 +132,10 @@ type Ask struct {
 	NameOf    func(userID int64) string // a member's display name (tests); nil reads the guild
 	Changes   []Change
 	Usage     Usage
+	// History is the whole conversation so far, in order, never edited (so the
+	// cache and Claude's earlier thinking stay valid). Run adds this turn to it;
+	// it's nil after a turn that can't be continued (an error or a refusal).
+	History []anthropic.BetaMessageParam
 }
 
 // NewMessage calls Claude (swappable in tests).
@@ -134,11 +144,30 @@ var NewMessage = func(ctx context.Context, params anthropic.BetaMessageNewParams
 	return client.Beta.Messages.New(ctx, params)
 }
 
-// Run returns Claude's reply as text (changes, if any, are in a.Changes).
+// Run starts a conversation with question; FollowUp continues one. Both return
+// Claude's reply as text (changes, if any, are in a.Changes).
 func (a *Ask) Run(ctx context.Context, question string) string {
 	now := time.Now().In(TZ())
-	messages := []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(
-		fmt.Sprintf("Today is %s Eastern. Asked by %s.\n\n%s", pytime.Strftime(now, "%A, %B %-d, %Y, %-I:%M %p"), a.AskerName, question)))}
+	a.History = nil
+	return a.turn(ctx, fmt.Sprintf("Today is %s Eastern. Asked by %s.\n\n%s",
+		pytime.Strftime(now, "%A, %B %-d, %Y, %-I:%M %p"), a.AskerName, question))
+}
+
+// FollowUp continues a.History with an officer's reply. link is the reply's
+// message link (so tools can reach its attachments); files names them.
+func (a *Ask) FollowUp(ctx context.Context, text, link string, files []string) string {
+	now := time.Now().In(TZ())
+	head := fmt.Sprintf("Follow-up from %s, %s Eastern (message %s", a.AskerName, pytime.Strftime(now, "%a %b %-d, %-I:%M %p"), link)
+	if len(files) > 0 {
+		head += "; attached: " + strings.Join(files, ", ")
+	}
+	return a.turn(ctx, head+"):\n\n"+text)
+}
+
+func (a *Ask) turn(ctx context.Context, userText string) string {
+	// Clip so appending never writes into a stored conversation's array
+	messages := append(slices.Clip(a.History), anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(userText)))
+	a.History = nil // set again only if this turn finishes cleanly
 	for range MaxTurns {
 		response, err := NewMessage(ctx, anthropic.BetaMessageNewParams{
 			Model: Model, MaxTokens: 16000,
@@ -163,6 +192,7 @@ func (a *Ask) Run(ctx context.Context, question string) string {
 					text.WriteString(b.Text)
 				}
 			}
+			a.History = append(messages, response.ToParam())
 			if out := strings.TrimSpace(text.String()); out != "" {
 				return out
 			}
