@@ -2,66 +2,14 @@ import os
 import asyncio
 
 import aiohttp
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 
-from bot.utils.gcal_client import CREDENTIALS_FILE
+# The Notion reader for the knowledge cache: pages shared with the integration
+# whose token is NOTION_TOKEN. Returns the pages that changed since the last
+# refresh as (id, title, url, last edited, text).
 
-# Google Drive and Notion readers for the knowledge cache. Each returns the
-# documents that changed since the last refresh as (id, title, url, modified, text).
-#   Drive: whatever is shared with the bot's service account (needs the Drive API
-#          turned on in its Cloud project).
-#   Notion: pages shared with the integration whose token is NOTION_TOKEN.
-
-MAX_CHARS = 200_000  # per document
-DRIVE_EXPORT = {
-    "application/vnd.google-apps.document": "text/plain",
-    "application/vnd.google-apps.presentation": "text/plain",
-    "application/vnd.google-apps.spreadsheet": "text/csv",
-}
-DRIVE_PLAIN = ("text/plain", "text/markdown", "text/csv")
+MAX_CHARS = 200_000  # per page
 NOTION_API = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
-
-
-# ---------- Google Drive ----------
-
-def drive_service():
-    creds = service_account.Credentials.from_service_account_file(
-        CREDENTIALS_FILE, scopes=["https://www.googleapis.com/auth/drive.readonly"])
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-def drive_files(seen):
-    """Changed Drive files: [(id, title, url, modified, text)], and every id still there.
-    seen: {file id: modifiedTime} from the last refresh. Runs in a worker thread."""
-    service = drive_service()
-    files, token = [], None
-    while True:
-        page = service.files().list(q="trashed = false", pageSize=200, pageToken=token,
-                                    fields="nextPageToken, files(id, name, mimeType, modifiedTime, webViewLink)",
-                                    includeItemsFromAllDrives=True, supportsAllDrives=True).execute(num_retries=3)
-        files += page.get("files", [])
-        token = page.get("nextPageToken")
-        if not token:
-            break
-    changed = []
-    for f in files:
-        if seen.get(f["id"]) == f["modifiedTime"]:
-            continue
-        try:
-            if f["mimeType"] in DRIVE_EXPORT:
-                data = service.files().export(fileId=f["id"], mimeType=DRIVE_EXPORT[f["mimeType"]]).execute(num_retries=3)
-            elif f["mimeType"] in DRIVE_PLAIN:
-                data = service.files().get_media(fileId=f["id"]).execute(num_retries=3)
-            else:
-                continue  # PDFs, images and the like: only searchable by name, which isn't worth an entry
-        except HttpError as e:
-            print(f"Knowledge: couldn't read Drive file {f['name']}: {e.status_code}")
-            continue
-        text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else str(data)
-        changed.append((f["id"], f["name"], f.get("webViewLink", ""), f["modifiedTime"], text[:MAX_CHARS]))
-    return changed, {f["id"] for f in files}
 
 
 # ---------- Notion ----------

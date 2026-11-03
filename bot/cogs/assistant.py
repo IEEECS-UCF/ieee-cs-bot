@@ -14,7 +14,7 @@ from bot.utils.alerts import alert
 # itself lives in the Officer cog's /officer group).
 #   Discord: every readable channel and thread, back-filled once and then kept up
 #            to date from new, edited and deleted messages, plus a catch-up every few hours.
-#   Drive and Notion: refreshed every few hours; only changed documents are re-read.
+#   Notion: refreshed every few hours; only changed pages are re-read.
 # Replies are public, so /officer ask only runs in channels members can't see.
 
 CATCH_UP_HOURS = 6
@@ -137,22 +137,18 @@ class Assistant(commands.Cog):
         if payload.guild_id == self.guild_id:
             await asyncio.to_thread(self.knowledge.remove, f"discord:{payload.message_id}")
 
-    # ---------- Drive and Notion ----------
+    # ---------- Notion ----------
 
     @tasks.loop(hours=DOCS_HOURS)
     async def refresh_documents(self):
-        for name, refresh in (("Drive", self.refresh_drive), ("Notion", self.refresh_notion)):
-            try:
-                await refresh()
-            except Exception as e:
-                print(f"Knowledge cache: couldn't refresh {name}: {e}")
+        try:
+            await self.refresh_notion()
+        except Exception as e:
+            print(f"Knowledge cache: couldn't refresh Notion: {e}")
 
     @refresh_documents.before_loop
     async def before_documents(self):
         await self.bot.wait_until_ready()
-
-    async def refresh_drive(self):
-        await self.refresh("drive", lambda seen: asyncio.to_thread(documents.drive_files, seen))
 
     async def refresh_notion(self):
         if documents.notion_configured():

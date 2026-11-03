@@ -3,19 +3,19 @@ import sqlite3
 import threading
 
 # The knowledge cache /officer ask searches: every Discord message the bot can
-# read, plus Google Drive files and Notion pages shared with the bot, in one
-# SQLite full-text index (data/knowledge.db). Discord messages are one entry
-# each; documents are split into overlapping chunks. Nothing is excluded.
+# read, plus Notion pages shared with the bot, in one SQLite full-text index
+# (data/knowledge.db). Discord messages are one entry each; Notion pages are
+# split into overlapping chunks. Nothing is excluded.
 #
-#   key     "discord:<message id>", "drive:<file id>:<n>", "notion:<page id>:<n>"
-#   source  discord | drive | notion
+#   key     "discord:<message id>", "notion:<page id>:<n>"
+#   source  discord | notion
 #   place   "#channel", "#forum › post", a document's title
 #   meta    small key/value table: last message id per channel, modified times
 
 DB_FILE = "data/knowledge.db"
 CHUNK = 1500
 OVERLAP = 200
-SOURCES = ("discord", "drive", "notion")
+SOURCES = ("discord", "notion")
 _lock = threading.Lock()
 
 
