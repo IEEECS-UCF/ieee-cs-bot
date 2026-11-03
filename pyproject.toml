@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "aiohttp>=3.13.3",
+    "anthropic>=2.4.0",
     "beautifulsoup4>=4.14.3",
     "discord.py>=2.7.1",
     "google-api-python-client>=2.193.0",

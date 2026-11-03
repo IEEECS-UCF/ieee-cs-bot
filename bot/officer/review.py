@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import datetime
@@ -13,10 +14,13 @@ from bot.officer.data import EventStore
 #   record["reviews"][kind] = {
 #       "text": what will be posted,
 #       "editor": user id of whoever wrote or last edited it (None: the bot wrote it),
+#       "ai": the editor started from a "Draft with AI" draft,
 #       "status": "pending" | "approved" | "posted" | "missed" | "cancelled" (with "why"),
 #       "approver": user id, "posted": jump url,
 #       "message": [thread id, message id],   # the review message in the event's post
 #       "name": the event's name, "for": event start (reminders), so a moved event gets a fresh review,
+#       "flyer": the calendar's flyer link, "has_flyer": whether it's attached to the review message
+#                (announcements: approving posts that same attachment with the text),
 #   }
 #
 # and as a message with Approve / Edit buttons in the event's post in the nudge forum.
@@ -25,6 +29,7 @@ from bot.officer.data import EventStore
 # before the event starts).
 
 KINDS = {"announcement": "Announcement", "reminder": "Day-of reminder"}
+FLYER_FILE = "flyer.png"
 PENDING, APPROVED, POSTED, MISSED, CANCELLED = "pending", "approved", "posted", "missed", "cancelled"
 store = EventStore()
 
@@ -69,7 +74,7 @@ def can_approve(review, user_id):
 
 def edited(review, text, user_id):
     """The review after an officer changes the text: their version now needs someone else's approval."""
-    return {**review, "text": text, "editor": user_id, "status": PENDING, "approver": None}
+    return {**review, "text": text, "editor": user_id, "status": PENDING, "approver": None, "ai": False}
 
 
 # ---------- the review message ----------
@@ -77,7 +82,8 @@ def edited(review, text, user_id):
 def status_line(kind, review, when=None):
     """Who wrote it and what has to happen next. when: the reminder's post time, as text."""
     where = f"<#{target_channel_id(kind)}>" if target_channel_id(kind) else "the announcements channel"
-    by = f"<@{review['editor']}>" if review.get("editor") else "the bot, from the calendar"
+    by = (f"<@{review['editor']}>" + (" with AI" if review.get("ai") else "")) if review.get("editor") \
+        else "the bot, from the calendar"
     at = f" at {when}" if when else ""
     status = review["status"]
     if status == POSTED:
@@ -89,12 +95,21 @@ def status_line(kind, review, when=None):
     if status == CANCELLED:
         return f"Written by {by}. Not posting: {review.get('why', 'cancelled')}."
     who = f"an officer other than <@{review['editor']}>" if review.get("editor") else "an officer"
-    return f"Written by {by}. Needs {who} to approve it before it posts in {where}{at}."
+    return f"Written by {by}. Needs {who} to approve it before it posts in {where}{at}.{flyer_note(kind, review)}"
+
+def flyer_note(kind, review):
+    if kind != "announcement" or review.get("has_flyer"):
+        return ""
+    if review.get("flyer"):
+        return "\n⚠️ The flyer link isn't a downloadable image, so it won't be attached."
+    return "\nNo flyer on the calendar event, so it posts as text only."
 
 def message_parts(event_name, kind, review, when=None):
     """(content, embed) for the review message. The embed shows the post as it will look."""
     content = f"📝 **{KINDS[kind]} for {event_name}**\n{status_line(kind, review, when)}"
     embed = discord.Embed(description=review["text"][:4096])
+    if review.get("has_flyer"):
+        embed.set_image(url=f"attachment://{FLYER_FILE}")
     return content, embed
 
 async def show(bot, kind, review, when=None, view=None):
@@ -107,19 +122,22 @@ async def show(bot, kind, review, when=None, view=None):
     except discord.HTTPException as e:
         print(f"Could not update the {kind} review for {review['name']}: {e}")
 
-async def open_review(bot, event, kind, text, editor, ping=None, when=None, view_for=None, extra=None):
+async def open_review(bot, event, kind, text, editor, ping=None, when=None, view_for=None, extra=None, flyer=None):
     """Post a new review in the event's post and store it, replacing any older one.
-    view_for(gid, kind) builds the Approve / Edit buttons. Returns (review, message) or (None, why)."""
+    view_for(gid, kind) builds the Approve / Edit buttons; flyer is the image's bytes, attached
+    so reviewers see it. Returns (review, message) or (None, why)."""
     cog = bot.get_cog("Officer")
     thread = await cog.event_post(event) if cog else None
     if thread is None:
         return None, "There's no event-planning channel set up (NUDGE_CHANNEL_ID), so there's nowhere to review it."
     old = get(event['id'], kind)
-    review = {"name": event['name'], "text": text, "editor": editor, "status": PENDING, "approver": None, **(extra or {})}
+    review = {"name": event['name'], "text": text, "editor": editor, "status": PENDING, "approver": None,
+              "flyer": event.get('flyer'), "has_flyer": bool(flyer), **(extra or {})}
     content, embed = message_parts(event['name'], kind, review, when)
     if ping:
         content = f"<@{ping}> {content}"
-    message = await thread.send(content, embed=embed, view=view_for(event['id'], kind),
+    files = [discord.File(io.BytesIO(flyer), filename=FLYER_FILE)] if flyer else []
+    message = await thread.send(content, embed=embed, view=view_for(event['id'], kind), files=files,
                                 allowed_mentions=discord.AllowedMentions(everyone=False, roles=False,
                                                                          users=[discord.Object(ping)] if ping else False))
     review["message"] = [thread.id, message.id]

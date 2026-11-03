@@ -6,7 +6,7 @@ import datetime
 import aiohttp
 import discord
 
-from bot.utils import event_text, checkin_client
+from bot.utils import event_text, checkin_client, ai_draft
 from bot.utils import knightconnect_client as kc
 from bot.utils.vtools_client import fetch_event as fetch_vtools_event, parse_event_id
 from bot.utils.gcal_client import patch_event, insert_event, delete_event as delete_calendar_event
@@ -141,7 +141,8 @@ class CardView(discord.ui.View):
         caption = event_text.instagram_caption(event)
         text = (f"**#announcements draft** (mentions only ping when posted; another officer has to approve it first)"
                 f"\n```md\n{draft}\n```\n**Instagram caption**\n```\n{caption}\n```")
-        await interaction.response.send_message(text[:2000], view=DraftView(self, event, draft), ephemeral=True)
+        view = DraftView(self, event, draft, link, f"<@&{role_id}>" if role_id else "@everyone")
+        await interaction.response.send_message(text[:2000], view=view, ephemeral=True)
 
     async def do_reminder(self, interaction, event):
         await interaction.response.send_message("Day-of reminder for this event:", view=ReminderPicker(self), ephemeral=True)
@@ -541,9 +542,10 @@ class DraftEdit(discord.ui.Modal, title="Edit the announcement"):
 
 class DraftView(discord.ui.View):
     """Sends the draft for review at most once. It only posts after another officer approves it."""
-    def __init__(self, card, event, draft):
+    def __init__(self, card, event, draft, discord_link="", opener="@everyone"):
         super().__init__(timeout=VIEW_TIMEOUT)
         self.card, self.event, self.draft, self.sent = card, event, draft, False
+        self.discord_link, self.opener, self.ai = discord_link, opener, False
 
     async def send_once(self, interaction, text):
         """Open the review and return what happened. Answer the interaction first: this can take a few seconds."""
@@ -551,10 +553,13 @@ class DraftView(discord.ui.View):
             return "Already sent for review."
         self.sent = True  # set before the await, so a double click can't send twice
         owner, _ = owner_of(self.event, store.get(self.event['id']))
+        sync = interaction.client.get_cog("CalendarSync")
+        flyer = await sync.download_flyer(self.event.get('flyer')) if sync and self.event.get('flyer') else None
         try:
             result, message = await review.open_review(
                 interaction.client, self.event, "announcement", text, interaction.user.id,
-                ping=owner if owner and owner != interaction.user.id else None, view_for=review_buttons)
+                ping=owner if owner and owner != interaction.user.id else None, view_for=review_buttons,
+                extra={"ai": self.ai and text == self.draft}, flyer=flyer)
         except discord.HTTPException as e:
             result, message = None, f"Discord didn't accept it ({e}). Try again."
         if result is None:
@@ -583,6 +588,35 @@ class DraftView(discord.ui.View):
             await interaction.response.send_message("Already sent for review.", ephemeral=True)
             return
         await interaction.response.send_modal(DraftEdit(self))
+
+    @discord.ui.button(label="Draft with AI", style=discord.ButtonStyle.secondary)
+    async def with_ai(self, interaction, button):
+        """Replace the draft with one Claude writes in the style of recent #announcements posts."""
+        if self.sent:
+            await interaction.response.send_message("Already sent for review.", ephemeral=True)
+            return
+        if not ai_draft.configured():
+            await interaction.response.send_message("AI drafting isn't set up (no ANTHROPIC_API_KEY).", ephemeral=True)
+            return
+        await interaction.response.defer()
+        channel = interaction.client.get_channel(review.target_channel_id("announcement") or 0)
+        examples = []
+        if channel is not None:
+            async for message in channel.history(limit=100):
+                if ai_draft.is_example(message):
+                    examples.append(message.content)
+                if len(examples) >= ai_draft.EXAMPLES:
+                    break
+        text, why = await ai_draft.draft(self.event, event_text.plain_description(self.event),
+                                         self.discord_link, self.opener, list(reversed(examples)))
+        if text is None:
+            await interaction.followup.send(why, ephemeral=True)
+            return
+        self.draft, self.ai = text, True
+        print(f"AI draft for {self.event['name']} written for {interaction.user} ({interaction.user.id})")
+        await interaction.edit_original_response(
+            content=f"**#announcements draft, written by Claude** (check every detail; another officer has to "
+                    f"approve it before it posts)\n```md\n{text}\n```"[:2000], view=self)
 
 
 # ---------- posts waiting for approval ----------
@@ -617,7 +651,9 @@ async def approve(interaction, gid, kind):
                                             "so nothing was posted. It's still waiting for approval.", ephemeral=True)
             return
         try:
-            posted = await channel.send(current["text"], allowed_mentions=mentions_in(current["text"]))
+            # The flyer reviewers saw is attached to the review message; post that same file
+            files = [await a.to_file() for a in interaction.message.attachments[:1]] if current.get("has_flyer") else []
+            posted = await channel.send(current["text"], files=files, allowed_mentions=mentions_in(current["text"]))
         except discord.HTTPException as e:
             await interaction.followup.send(f"Discord didn't accept the post ({e}). Nothing was posted; try again.", ephemeral=True)
             return

@@ -15,10 +15,11 @@ AUTHOR, OTHER = 1, 2
 class Thread:
     def __init__(self, fail=False):
         self.id, self.fail, self.sent, self.edits = 50, fail, [], []
-    async def send(self, content, embed=None, view=None, allowed_mentions=None, **kwargs):
+    async def send(self, content, embed=None, view=None, allowed_mentions=None, files=(), **kwargs):
         if self.fail:
             raise discord.HTTPException(types.SimpleNamespace(status=500, reason="boom"), "boom")
         self.sent.append((content, embed, view))
+        self.files = [f.filename for f in files]
         return types.SimpleNamespace(id=60 + len(self.sent), jump_url=f"https://discord.com/review/{len(self.sent)}")
     def get_partial_message(self, mid):
         thread = self
@@ -29,21 +30,31 @@ class Thread:
 
 class Channel:
     def __init__(self):
-        self.posts = []
-    async def send(self, text, allowed_mentions=None):
+        self.posts, self.files = [], []
+    async def send(self, text, allowed_mentions=None, files=()):
         self.posts.append(text)
+        self.files.append(files)
         return types.SimpleNamespace(jump_url="https://discord.com/announcements/1")
 
-def client(thread, channel=None):
+def client(thread, channel=None, flyer=None):
     async def event_post(e):
         return thread
+    async def download_flyer(url):
+        return flyer
     cog = types.SimpleNamespace(event_post=event_post, cache=types.SimpleNamespace(snapshot=None))
-    return types.SimpleNamespace(get_cog=lambda name: cog, get_partial_messageable=lambda tid: thread,
-                                 get_channel=lambda cid: channel)
+    sync = types.SimpleNamespace(download_flyer=download_flyer)
+    return types.SimpleNamespace(get_cog=lambda name: sync if name == "CalendarSync" else cog,
+                                 get_partial_messageable=lambda tid: thread, get_channel=lambda cid: channel)
+
+class Attachment:
+    filename = "flyer.png"
+    async def to_file(self):
+        return "flyer-file"
 
 class Interaction:
-    def __init__(self, user, bot):
+    def __init__(self, user, bot, attachments=()):
         self.user, self.client, self.said = types.SimpleNamespace(id=user), bot, []
+        self.message = types.SimpleNamespace(attachments=list(attachments))
         outer = self
         class Response:
             async def send_message(self, text, ephemeral=False):
@@ -184,3 +195,68 @@ async def test_reminder_loop_never_posts_without_approval(monkeypatch):
     assert len(channel.posts) == 1 and "is TODAY" in channel.posts[0]
     await at(e['start'].replace(hour=9, minute=20))
     assert len(channel.posts) == 1 and review.get("g1", "reminder")["status"] == review.POSTED
+
+
+# ---------- the flyer goes with the announcement ----------
+
+async def test_the_flyer_reviewers_saw_is_posted_with_the_announcement(monkeypatch):
+    monkeypatch.setenv("ANNOUNCE_CHANNEL_ID", "9")
+    thread, channel = Thread(), Channel()
+    bot = client(thread, channel, flyer=b"png")
+    async def redraw(fresh=False):
+        pass
+    draft = views.DraftView(types.SimpleNamespace(redraw=redraw), event(), "Hello")
+    await draft.send_once(Interaction(AUTHOR, bot), "Hello")
+    assert thread.files == ["flyer.png"] and thread.sent[0][1].image.url == "attachment://flyer.png"
+    await views.approve(Interaction(OTHER, bot, attachments=[Attachment()]), "g1", "announcement")
+    assert channel.files == [["flyer-file"]]
+
+async def test_reviewers_are_told_when_there_is_no_flyer(monkeypatch):
+    bot = client(Thread(), Channel(), flyer=None)
+    await review.open_review(bot, event(), "announcement", "Hello", AUTHOR, view_for=views.review_buttons)
+    assert "isn't a downloadable image" in review.message_parts("x", "announcement", review.get("g1", "announcement"))[0]
+    await review.open_review(bot, event(flyer=None), "announcement", "Hello", AUTHOR, view_for=views.review_buttons)
+    assert "No flyer" in review.message_parts("x", "announcement", review.get("g1", "announcement"))[0]
+
+
+# ---------- Draft with AI ----------
+
+async def test_an_ai_draft_replaces_the_draft_and_still_needs_review(monkeypatch):
+    from bot.utils import ai_draft
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
+    seen = {}
+    async def fake_draft(e, description, link, opener, examples):
+        seen.update(opener=opener, examples=examples)
+        return "# Hey <@&111>!\nAI text", None
+    monkeypatch.setattr(ai_draft, "draft", fake_draft)
+    edits = []
+    class Response:
+        async def defer(self):
+            pass
+    async def edit_original_response(content, view):
+        edits.append(content)
+    async def redraw(fresh=False):
+        pass
+    view = views.DraftView(types.SimpleNamespace(redraw=redraw), event(), "Plain", "https://discord.com/events/1/2", "<@&111>")
+    interaction = types.SimpleNamespace(response=Response(), edit_original_response=edit_original_response,
+                                        client=types.SimpleNamespace(get_channel=lambda cid: None),
+                                        user=types.SimpleNamespace(id=AUTHOR))
+    await view.with_ai.callback(interaction)
+    assert view.draft == "# Hey <@&111>!\nAI text" and view.ai and seen["opener"] == "<@&111>"
+    assert "written by Claude" in edits[0]
+    bot = client(Thread(), Channel())
+    await view.send_once(Interaction(AUTHOR, bot), view.draft)
+    saved = review.get("g1", "announcement")
+    assert saved["ai"] and saved["status"] == review.PENDING and "with AI" in review.status_line("announcement", saved)
+    assert not review.edited(saved, "changed", OTHER)["ai"]
+
+def test_ai_examples_are_officers_own_posts():
+    from bot.utils import ai_draft
+    person = types.SimpleNamespace(author=types.SimpleNamespace(bot=False), content="x" * 100)
+    bot_post = types.SimpleNamespace(author=types.SimpleNamespace(bot=True), content="x" * 100)
+    short = types.SimpleNamespace(author=types.SimpleNamespace(bot=False), content="hi")
+    assert [ai_draft.is_example(m) for m in (person, bot_post, short)] == [True, False, False]
+    examples, details = ai_draft.prompt(event(), "Learn bash.", "https://d/1", "<@&111>", ["Example post"])
+    assert "Example post" in examples["text"] and examples["cache_control"] == {"type": "ephemeral"}
+    assert "Open with this mention: <@&111>" in details["text"] and "Room: ENG2 205" in details["text"]
+    assert "cache_control" not in details                       # only the stable part is cached
