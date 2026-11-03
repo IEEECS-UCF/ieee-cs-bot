@@ -126,7 +126,6 @@ Not done yet:
   images, member chunking and the forum posts.
 - **CPU and memory not measured.** The reason for the port (a history re-read
   pinning a core at about 145 MB) needs a side-by-side run to confirm.
-- No systemd unit or deploy-script change; `deploy.yml` still deploys the Python bot.
 - `scripts/drive_login.py` stays Python. It's a one-time sign-in, and the Go bot
   reads the token file it writes.
 
@@ -183,6 +182,23 @@ double up. Test with a second Discord application on a test guild.
    To compare resource use, run each through a full knowledge-cache back-fill
    (delete `cache/knowledge.db`) and watch `ps -o rss,pcpu`.
 
-Before any switch in production: run it on the test guild for a while, then
-plan the cutover separately. That means a systemd unit change, a deploy.yml
-change, and a copy of the real `data/` taken while the Python bot is stopped.
+## In production (since Nov 3, 2026)
+
+The Go bot runs on the server as systemd `ieee-bot-go`, from
+`/home/ubuntu/ieee-bot-go/ieee-bot`, in the Python bot's directory with its env
+file, `data/` and `cache/`. The Python unit `ieee-bot` is stopped and disabled,
+and the two units conflict, so only one runs.
+
+Pushing `main` runs `deploy.yml`: it tests both bots, builds the Go binary and
+sends it to `~/deploy/deploy.sh cs` on stdin. While `~/deploy/cs-runs-go`
+exists, that script updates the Python code (for a quick revert), installs the
+binary, keeps the previous one as `ieee-bot.prev`, and puts it back if the new
+one doesn't log in within a minute.
+
+To go back to the Python bot:
+
+```bash
+rm ~/deploy/cs-runs-go; sudo systemctl disable --now ieee-bot-go; sudo systemctl enable --now ieee-bot
+```
+
+Either bot reads the other's `data/` files.
