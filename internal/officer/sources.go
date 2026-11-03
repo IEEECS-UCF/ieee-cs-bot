@@ -793,6 +793,11 @@ func NewSnapshotCache(b *botkit.Bot) *SnapshotCache {
 	return &SnapshotCache{bot: b, gather: Gather}
 }
 
+// UseGather replaces how the cache fetches a snapshot (tests).
+func (c *SnapshotCache) UseGather(f func(map[string]string, map[int64]bool) (*Snapshot, error)) {
+	c.gather = f
+}
+
 func (c *SnapshotCache) discordLinks() (map[string]string, map[int64]bool) {
 	ids, sent := map[string]string{}, map[int64]bool{}
 	if c.bot == nil {

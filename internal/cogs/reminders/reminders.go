@@ -84,8 +84,12 @@ type Cog struct {
 	bot       *botkit.Bot
 	guildID   string
 	channelID string
-	mu        sync.Mutex
-	state     State
+	running   sync.Mutex // one pass at a time
+	// mu guards state. Never wait on anything else while holding it: the
+	// officer cache asks for SentIDs while holding its own lock, so taking
+	// that lock under mu deadlocks both.
+	mu    sync.Mutex
+	state State
 }
 
 func Setup(b *botkit.Bot) {
@@ -161,13 +165,14 @@ func buttons(gid, _ string) []discordgo.MessageComponent {
 
 // Run is one pass of the loop.
 func (c *Cog) Run() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.running.Lock()
+	defer c.running.Unlock()
 	events, ok := guildEvents(c.bot, c.guildID)
 	if !ok || !channelExists(c.bot, c.channelID) {
 		log.Print("Error: Could not find guild or reminder channel.")
 		return nil
 	}
+	// Before taking mu (see Cog.mu)
 	var snap *officer.Snapshot
 	if cog, ok := c.bot.Cog(cogapi.OfficerName).(officerCache); ok && cog != nil {
 		var err error
@@ -175,6 +180,8 @@ func (c *Cog) Run() error {
 			return err
 		}
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	at := now()
 	sent := c.state.Sent
 	for _, event := range upcoming(events, at) {

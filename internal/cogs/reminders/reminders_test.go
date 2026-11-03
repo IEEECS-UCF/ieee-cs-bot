@@ -122,3 +122,36 @@ func TestUpcomingKeepsTheLastDay(t *testing.T) {
 		t.Errorf("%v", events)
 	}
 }
+
+// The officer cache asks the reminders which reminders were sent (SentIDs)
+// while it refreshes. A reminder pass that held its state lock while waiting
+// for that refresh deadlocked both (and everything waiting on event data).
+func TestARefreshDuringAReminderPassDoesntDeadlock(t *testing.T) {
+	testutil.Setup(t)
+	t.Setenv("REMINDER_CHANNEL_ID", "9")
+	b := botkit.NewOffline()
+	b.AddCog(cogapi.CalendarSyncName, fakeSync{})
+	cache := officer.NewSnapshotCache(b) // empty, so the pass has to refresh it
+	cache.UseGather(func(map[string]string, map[int64]bool) (*officer.Snapshot, error) {
+		return officer.NewSnapshot(nil, nil, time.Now()), nil
+	})
+	b.AddCog(cogapi.OfficerName, fakeOfficer{cache})
+	c := New(b)
+	b.AddCog(cogapi.EventRemindersName, c) // the refresh calls c.SentIDs
+
+	oldEvents, oldExists := guildEvents, channelExists
+	defer func() { guildEvents, channelExists = oldEvents, oldExists }()
+	guildEvents = func(*botkit.Bot, string) ([]Event, bool) { return nil, true }
+	channelExists = func(*botkit.Bot, string) bool { return true }
+
+	done := make(chan error, 1)
+	go func() { done <- c.Run() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reminder pass deadlocked with the officer cache")
+	}
+}
