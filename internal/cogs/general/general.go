@@ -1,5 +1,4 @@
 // Package general has the commands anyone can use: /socials and /info.
-// (bot/cogs/general.py)
 package general
 
 import (

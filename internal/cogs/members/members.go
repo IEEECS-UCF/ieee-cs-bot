@@ -1,5 +1,5 @@
 // Package members is /member verify and /member status, for anyone in the
-// server (bot/cogs/members.py). Each request posts a review card in
+// server. Each request posts a review card in
 // MEMBER_REVIEW_CHANNEL_ID; an officer checks the number in IEEE's validator
 // and presses Approve (gives DUES_PAYING_ROLE_ID) or Reject. People who had
 // the role before this existed are recorded as verified once (at startup with

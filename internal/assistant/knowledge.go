@@ -1,6 +1,6 @@
 // Package assistant is /officer ask: Claude with tools over the chapter's
 // knowledge cache, the officer tools' event data, and changes an officer
-// confirms. (bot/assistant/*.py)
+// confirms.
 package assistant
 
 import (

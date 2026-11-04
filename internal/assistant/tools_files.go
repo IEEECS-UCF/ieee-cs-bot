@@ -24,7 +24,6 @@ import (
 // /officer ask tools for files: Discord attachments, Google Drive (Docs, Sheets)
 // and Notion. Reads run right away; anything that changes something is queued
 // with a.queue() and only happens when the asker clicks Confirm.
-// (bot/assistant/tools_files.py)
 
 // FileTools is FILE_TOOLS, built fresh each call (agent.go marks the last of
 // Tools for caching, and that mustn't leak into these).

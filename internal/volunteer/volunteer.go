@@ -1,7 +1,7 @@
 // Package volunteer is the volunteer board: tasks posted with Claim/Unclaim
 // buttons that any member can press. Officers add and close tasks from
 // /officer chapter. The buttons' custom IDs carry the task ID, so they keep
-// working after restarts. (bot/cogs/volunteer.py)
+// working after restarts.
 package volunteer
 
 import (

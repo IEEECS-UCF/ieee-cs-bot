@@ -358,7 +358,7 @@ func (tc *testCog) withReviews(t *testing.T, sync *fakeSync) {
 	t.Setenv("ANNOUNCE_CHANNEL_ID", "9")
 }
 
-// ---------- fixtures (tests/officer_fixtures.py) ----------
+// ---------- fixtures ----------
 
 // NOW is a Monday at noon, fixed so tests don't drift.
 var NOW = time.Date(2026, 11, 2, 12, 0, 0, 0, testutil.TZ)

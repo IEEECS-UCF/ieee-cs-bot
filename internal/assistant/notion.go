@@ -21,7 +21,7 @@ import (
 
 // Notion for /officer ask and the knowledge cache, through the "IEEE CS bot"
 // integration (token in NOTION_TOKEN). It sees the pages shared with it in
-// Notion and can read, create, edit and archive them. (bot/assistant/notion.py)
+// Notion and can read, create, edit and archive them.
 
 const (
 	NotionAPI           = "https://api.notion.com/v1"

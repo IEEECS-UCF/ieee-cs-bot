@@ -1,6 +1,6 @@
 // Package eventtext builds text from a calendar event: copy-paste blocks for
 // KnightConnect and vTools, and drafts for #announcements and Instagram.
-// Nothing here posts anything. (bot/utils/event_text.py)
+// Nothing here posts anything.
 package eventtext
 
 import (

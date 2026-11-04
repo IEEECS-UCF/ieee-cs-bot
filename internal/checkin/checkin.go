@@ -1,7 +1,7 @@
 // Package checkin is the client for the check-in Apps Script web app
 // (apps_script/checkin/Code.gs), which runs on the chapter Google account. It
 // answers POSTs with JSON; Apps Script replies through a redirect, which is
-// followed as a GET. (bot/utils/checkin_client.py)
+// followed as a GET.
 package checkin
 
 import (

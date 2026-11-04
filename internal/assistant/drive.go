@@ -32,7 +32,6 @@ import (
 // once with scripts/drive_login.py, which saves its refresh token in
 // DriveTokenFile. Everything here blocks; handlers already run on goroutines.
 // "Delete" only ever moves to Drive's trash, where it can be restored for 30 days.
-// (bot/assistant/drive.py)
 
 const (
 	DriveTokenFile = "credentials/drive_user.json"

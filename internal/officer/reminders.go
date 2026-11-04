@@ -14,7 +14,7 @@ import (
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/pytime"
 )
 
-// The rules of the day-of reminders (bot/cogs/event_reminders.py); the loop
+// The rules of the day-of reminders; the loop
 // that posts them is internal/cogs/reminders.
 
 const (

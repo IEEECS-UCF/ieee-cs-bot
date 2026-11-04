@@ -1,6 +1,5 @@
 // Package calendarsync keeps Google Calendar and Discord scheduled events in
 // step, both ways, and keeps the weekly summary in the events channel.
-// (bot/cogs/calendar_sync.py)
 package calendarsync
 
 import (

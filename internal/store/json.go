@@ -1,5 +1,5 @@
 // Package store reads and writes the bot's data/*.json files, in the same
-// format the Python bot uses (bot/officer/data.py).
+// format the Python bot uses.
 package store
 
 import (

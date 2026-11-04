@@ -2,7 +2,7 @@
 // gather (sources), the status model (steps), the text they show (render),
 // the monthly report (metrics), the New event form (new_event), tabling
 // reminders, posts waiting for review, and the rules half of the day-of
-// reminders. (bot/officer/*.py, bot/cogs/event_reminders.py)
+// reminders.
 package officer
 
 import (

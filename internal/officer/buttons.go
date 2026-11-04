@@ -9,7 +9,7 @@ import (
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/eventtext"
 )
 
-// Persistent buttons (bot/officer/views.py). Their custom IDs are matched by
+// Persistent buttons. Their custom IDs are matched by
 // routes in internal/cogs/officer, so they work after restarts.
 
 const (

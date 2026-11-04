@@ -8,7 +8,6 @@
 // Replies are public, so /officer ask only runs in channels members can't see.
 // Officers can reply to an answer to follow up (followups.go); anyone else's
 // reply is ignored.
-// (bot/cogs/assistant.py)
 package assistant
 
 import (

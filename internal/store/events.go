@@ -22,7 +22,7 @@ import (
 //	}}
 const (
 	EventsFile         = "data/events.json"
-	DeadlinesFile      = "bot/deadlines.json"
+	DeadlinesFile      = "config/deadlines.json"
 	DeadlinesExtraFile = "data/deadlines_extra.json" // deadlines added or hidden from Discord
 	NudgesFile         = "data/nudges.json"          // {"sent": {"<event>|<step>": date}, "threads": {...}, "status": {...}, "day": date}
 	DigestStateFile    = "data/digest.json"

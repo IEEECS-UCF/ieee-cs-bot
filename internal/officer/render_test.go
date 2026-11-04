@@ -104,7 +104,7 @@ func TestStatusSaysWhenNothingIsOpen(t *testing.T) {
 	}
 }
 
-// ---------- clashes (test_new_event.py) ----------
+// ---------- clashes ----------
 
 func TestClashesFlagSameRoomAndSameTime(t *testing.T) {
 	testutil.Setup(t)

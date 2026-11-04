@@ -1,9 +1,8 @@
 // Package aidraft is "Draft with AI": Claude writes an #announcements post,
 // from an event's details (event card) or an officer's notes (/officer
 // announce), in the style of a fixed set of the chapter's best past posts
-// (announcement_examples.json, chosen by the chair; the Python bot reads the
-// same file). The draft still goes through officer review like any other.
-// (bot/utils/ai_draft.py)
+// (announcement_examples.json, chosen by the chair). The draft still goes
+// through officer review like any other.
 package aidraft
 
 import (

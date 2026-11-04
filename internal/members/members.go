@@ -1,7 +1,7 @@
 // Package members keeps IEEE membership checks. Members submit their number
 // with /member verify; an officer looks it up in IEEE's validator (it needs an
 // IEEE sign-in, and IEEE only offers an API to large conferences) and approves
-// or rejects it. (bot/officer/members.py)
+// or rejects it.
 //
 //	{"<user id>": {"number": "09994411", "email": "", "status": "pending|verified|rejected",
 //	               "year": 2026, "submitted": "YYYY-MM-DD", "reviewed_by": <id>, "reason": "",

@@ -1,5 +1,5 @@
 // Package testutil holds what the Python tests' conftest.py set up: the env
-// the bot reads, a fresh working directory with data/ and bot/deadlines.json,
+// the bot reads, a fresh working directory with data/ and config/deadlines.json,
 // and a sample event.
 package testutil
 
@@ -19,14 +19,14 @@ var Env = map[string]string{
 	"REMINDER_ROLE_WORKSHOPS": "111", "REMINDER_ROLE_SOCIALS": "222", "REMINDER_ROLE_PRODEV": "333",
 }
 
-// RepoRoot is the repository root (where bot/deadlines.json lives).
+// RepoRoot is the repository root (where config/deadlines.json lives).
 func RepoRoot() string {
 	_, file, _, _ := runtime.Caller(0)
 	return filepath.Join(filepath.Dir(file), "..", "..")
 }
 
 // Setup sets the env and moves the test into an empty directory with data/
-// and a copy of bot/deadlines.json, so data/*.json starts fresh.
+// and a copy of config/deadlines.json, so data/*.json starts fresh.
 func Setup(t *testing.T) string {
 	t.Helper()
 	for k, v := range Env {
@@ -34,14 +34,14 @@ func Setup(t *testing.T) string {
 			t.Setenv(k, v)
 		}
 	}
-	deadlines, err := os.ReadFile(filepath.Join(RepoRoot(), "bot", "deadlines.json"))
+	deadlines, err := os.ReadFile(filepath.Join(RepoRoot(), "config", "deadlines.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "data"), 0o755)
-	os.MkdirAll(filepath.Join(dir, "bot"), 0o755)
-	os.WriteFile(filepath.Join(dir, "bot", "deadlines.json"), deadlines, 0o644)
+	os.MkdirAll(filepath.Join(dir, "config"), 0o755)
+	os.WriteFile(filepath.Join(dir, "config", "deadlines.json"), deadlines, 0o644)
 	t.Chdir(dir)
 	return dir
 }

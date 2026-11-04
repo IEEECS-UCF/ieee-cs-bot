@@ -5,7 +5,7 @@ token) to stdout, so pipe it straight to the server instead of saving it here:
 
     uv run --with google-auth-oauthlib python scripts/drive_login.py client_secret.json \\
       | ssh -i ~/ssh-key-2025-01-03.key ubuntu@158.101.101.238 \\
-        'sudo tee /home/ubuntu/ieee-cs-bot/credentials/drive_user.json >/dev/null && sudo systemctl restart ieee-bot'
+        'sudo tee /home/ubuntu/ieee-cs-bot/credentials/drive_user.json >/dev/null && sudo systemctl restart ieee-bot-go'
 
 client_secret.json is the "Desktop app" OAuth client downloaded from the bot's
 Google Cloud project (APIs & Services → Credentials).

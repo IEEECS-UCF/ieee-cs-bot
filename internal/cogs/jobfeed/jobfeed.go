@@ -1,5 +1,5 @@
 // Package jobfeed posts new internship and new grad listings that match the
-// club's fields of interest (bot/cogs/job_feed.py).
+// club's fields of interest.
 package jobfeed
 
 import (

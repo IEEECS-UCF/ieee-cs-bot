@@ -20,7 +20,7 @@ import (
 )
 
 // Downloads job lists, company boards and Workday sites and boils them down
-// to slim listings (bot/utils/job_worker.py). Python ran this as a child
+// to slim listings. Python ran this as a child
 // process to hand the memory of parsing the full responses back to the OS;
 // here the responses are decoded a listing at a time into small structs, so
 // it runs in-process.

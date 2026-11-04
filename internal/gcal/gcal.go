@@ -1,5 +1,4 @@
 // Package gcal talks to Google Calendar with the chapter's service account.
-// (bot/utils/gcal_client.py)
 package gcal
 
 import (

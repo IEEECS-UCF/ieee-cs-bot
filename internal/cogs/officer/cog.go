@@ -10,7 +10,7 @@
 //
 // The digest (DIGEST_DAYS) and the event posts (status + daily pings) are
 // drawn from the same steps. Last month's report posts on the 1st
-// (METRICS_CHANNEL_ID). (bot/cogs/officer.py, bot/officer/views.py)
+// (METRICS_CHANNEL_ID).
 package officer
 
 import (
