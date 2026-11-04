@@ -3,11 +3,14 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -204,7 +207,7 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 	messages := append(slices.Clip(a.History), anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(userText)))
 	a.History = nil // set again only if this turn finishes cleanly
 	for range MaxTurns {
-		response, err := NewMessage(ctx, anthropic.BetaMessageNewParams{
+		params := anthropic.BetaMessageNewParams{
 			Model: Model, MaxTokens: 16000,
 			OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortMedium},
 			Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
@@ -212,11 +215,29 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 			System:       a.system(),
 			Tools:        Tools, Messages: messages,
 			CacheControl: anthropic.NewBetaCacheControlEphemeralParam(),
-		})
+		}
+		clearing := ClearOldToolResults.Load()
+		if clearing {
+			params.Betas = append(params.Betas, anthropic.AnthropicBetaContextManagement2025_06_27)
+			params.ContextManagement = clearToolResults()
+		}
+		response, err := NewMessage(ctx, params)
+		if err != nil && clearing && rejectsClearing(err) {
+			// The API won't take it: turn it off (until a restart) and ask again without
+			ClearOldToolResults.Store(false)
+			log.Printf("/officer ask: clearing old tool results turned off, the API refused it: %v", err)
+			params.Betas, params.ContextManagement = params.Betas[:len(params.Betas)-1], anthropic.BetaContextManagementConfigParam{}
+			response, err = NewMessage(ctx, params)
+		}
 		if err != nil {
 			return aidraft.APIErrorText(err)
 		}
 		a.count(response.Usage)
+		for _, edit := range response.ContextManagement.AppliedEdits {
+			if edit.ClearedToolUses > 0 {
+				a.Used = append(a.Used, fmt.Sprintf("(cleared %d old tool results, %d tokens)", edit.ClearedToolUses, edit.ClearedInputTokens))
+			}
+		}
 		a.noteTools(response.Content)
 		if response.StopReason == "refusal" {
 			return "Claude declined to answer that one."
@@ -288,6 +309,42 @@ func (a *Ask) noteTools(content []anthropic.BetaContentBlockUnion) {
 			a.Used = append(a.Used, b.Name)
 		}
 	}
+}
+
+// ClearOldToolResults has the API drop older tool results (Drive and
+// Notion reads, web pages) from a long conversation once it passes
+// ClearAfterTokens, keeping the latest few. Follow-ups resend the whole
+// conversation, so this keeps their cost down; Claude can look something up
+// again if it needs it. It turns itself off if the API ever refuses it.
+var ClearOldToolResults = func() *atomic.Bool { b := &atomic.Bool{}; b.Store(true); return b }()
+
+const (
+	ClearAfterTokens = 50000
+	KeepToolResults  = 4
+)
+
+func clearToolResults() anthropic.BetaContextManagementConfigParam {
+	return anthropic.BetaContextManagementConfigParam{Edits: []anthropic.BetaContextManagementConfigEditUnionParam{
+		{OfClearToolUses20250919: &anthropic.BetaClearToolUses20250919EditParam{
+			Trigger: anthropic.BetaClearToolUses20250919EditTriggerUnionParam{
+				OfInputTokens: &anthropic.BetaInputTokensTriggerParam{Value: ClearAfterTokens}},
+			Keep: anthropic.BetaToolUsesKeepParam{Value: KeepToolResults},
+			// Clearing means the cached conversation is written again, so only
+			// when it saves a good amount
+			ClearAtLeast: anthropic.BetaInputTokensClearAtLeastParam{Value: 10000},
+		}},
+	}}
+}
+
+// rejectsClearing is whether err is the API refusing the context management setting.
+func rejectsClearing(err error) bool {
+	var apiErr *anthropic.Error
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 400 {
+		return false
+	}
+	text := strings.ToLower(apiErr.Error())
+	return strings.Contains(text, "context_management") || strings.Contains(text, "context-management") ||
+		strings.Contains(text, "clear_tool_uses")
 }
 
 func (a *Ask) count(u anthropic.BetaUsage) {

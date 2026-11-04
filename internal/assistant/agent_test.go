@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -344,5 +346,48 @@ func TestAnswersOnlyUseChannelsTheAskerCanSee(t *testing.T) {
 	}
 	if got, _ := call(t, a, "read_discord_context", map[string]any{"url": "https://discord.com/channels/1/666/6"}); !strings.Contains(got, "can't see") {
 		t.Error(got)
+	}
+}
+
+func apiError(t *testing.T, status int, body string) error {
+	t.Helper()
+	req, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", nil)
+	e := &anthropic.Error{StatusCode: status, Request: req, Response: &http.Response{StatusCode: status}}
+	if err := e.UnmarshalJSON([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// Old tool results are cleared in long conversations; if the API ever refuses
+// that, the question is asked again without it, and it stays off.
+func TestClearingOldToolResultsTurnsItselfOffIfRefused(t *testing.T) {
+	testutil.Setup(t)
+	defer ClearOldToolResults.Store(true)
+	a, _ := makeAsk(t)
+	var sent []anthropic.BetaMessageNewParams
+	old := NewMessage
+	NewMessage = func(_ context.Context, p anthropic.BetaMessageNewParams) (*anthropic.BetaMessage, error) {
+		sent = append(sent, p)
+		if len(p.ContextManagement.Edits) > 0 {
+			return nil, apiError(t, 400, `{"type":"error","error":{"type":"invalid_request_error","message":"context_management: Extra inputs are not permitted"}}`)
+		}
+		return message(t, `{"id": "m1", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "stop_reason": "end_turn",
+			"content": [{"type": "text", "text": "Hi"}], "usage": {"input_tokens": 1, "output_tokens": 1}}`), nil
+	}
+	defer func() { NewMessage = old }()
+	raw, _ := json.Marshal(clearToolResults())
+	if !strings.Contains(string(raw), `"type":"clear_tool_uses_20250919"`) || !strings.Contains(string(raw), `"value":50000`) {
+		t.Fatalf("%s", raw)
+	}
+	if answer := a.Run(context.Background(), "hello"); answer != "Hi" {
+		t.Fatalf("%q", answer)
+	}
+	if len(sent) != 2 || len(sent[1].ContextManagement.Edits) != 0 || slices.Contains(sent[1].Betas, anthropic.AnthropicBetaContextManagement2025_06_27) {
+		t.Fatalf("%d sends", len(sent))
+	}
+	a.Run(context.Background(), "again")
+	if len(sent) != 3 || len(sent[2].ContextManagement.Edits) != 0 {
+		t.Error("tried clearing again after the API refused it")
 	}
 }
