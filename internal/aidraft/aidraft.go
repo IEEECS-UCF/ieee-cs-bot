@@ -1,11 +1,15 @@
 // Package aidraft is "Draft with AI": Claude writes an #announcements post,
 // from an event's details (event card) or an officer's notes (/officer
-// announce), in the style of recent posts by officers. The draft still goes
-// through officer review like any other. (bot/utils/ai_draft.py)
+// announce), in the style of a fixed set of the chapter's best past posts
+// (announcement_examples.json, chosen by the chair; the Python bot reads the
+// same file). The draft still goes through officer review like any other.
+// (bot/utils/ai_draft.py)
 package aidraft
 
 import (
 	"context"
+	_ "embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -18,14 +22,32 @@ import (
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/pytime"
 )
 
-const (
-	Model           = anthropic.ModelClaudeSonnet5_5
-	Examples        = 12 // recent officer posts shown as the house style
-	ExampleMinChars = 80 // skip one-liners
-)
+const Model = anthropic.ModelClaudeSonnet5_5
+
+//go:embed announcement_examples.json
+var examplesFile []byte
+
+// Emojis lists the server's custom emojis for the prompt (the officer cog sets
+// it; nil leaves them out).
+var Emojis func() string
+
+// ExamplePosts is the chosen example announcements, in the file's order.
+func ExamplePosts() []string {
+	var examples []struct{ Text string }
+	if err := json.Unmarshal(examplesFile, &examples); err != nil {
+		panic("aidraft: announcement_examples.json: " + err.Error())
+	}
+	posts := make([]string, len(examples))
+	for i, e := range examples {
+		posts[i] = e.Text
+	}
+	return posts
+}
 
 const System = `You write #announcements posts for a university student chapter's Discord server.
-Match the style of the example posts you're given: their layout, headings, emoticons, length and tone.
+Match the style of the example posts you're given (the chapter's best past announcements): their layout, headings, emoticons, length and tone.
+Format with Discord markdown: a # or ## heading for the event or topic, **bold** for the date, time and room, and - bullet lists when there are several items.
+You can use the server's custom emojis listed after the examples, written exactly as listed.
 
 Rules:
 - Use only the facts in the event details. Never invent speakers, food, prizes, prerequisites or anything else.
@@ -36,12 +58,7 @@ Rules:
 
 func Configured() bool { return os.Getenv("ANTHROPIC_API_KEY") != "" }
 
-// IsExample: a past announcement written by a person, long enough to show the style.
-func IsExample(authorIsBot bool, content string) bool {
-	return !authorIsBot && len([]rune(content)) >= ExampleMinChars
-}
-
-// Prompt is the user turn: the example posts first (cached, since they rarely
+// Prompt is the user turn: the example posts first (cached, since they never
 // change between drafts), then what to write.
 func Prompt(examples []string, ask string) []anthropic.BetaContentBlockParamUnion {
 	var parts []string
@@ -52,8 +69,13 @@ func Prompt(examples []string, ask string) []anthropic.BetaContentBlockParamUnio
 	if shown == "" {
 		shown = "(none yet)"
 	}
+	if Emojis != nil {
+		if list := Emojis(); list != "" {
+			shown += "\n\nThe server's custom emojis:\n" + list
+		}
+	}
 	return []anthropic.BetaContentBlockParamUnion{
-		{OfText: &anthropic.BetaTextBlockParam{Text: "Recent posts in #announcements:\n" + shown,
+		{OfText: &anthropic.BetaTextBlockParam{Text: "Example posts from #announcements:\n" + shown,
 			CacheControl: anthropic.NewBetaCacheControlEphemeralParam()}},
 		{OfText: &anthropic.BetaTextBlockParam{Text: ask}},
 	}

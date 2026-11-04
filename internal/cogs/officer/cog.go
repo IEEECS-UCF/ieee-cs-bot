@@ -155,6 +155,7 @@ func (c *Cog) Cache() *off.SnapshotCache { return c.cache }
 func Setup(b *botkit.Bot) {
 	c := New(b)
 	b.AddCog(cogapi.OfficerName, c)
+	aidraft.Emojis = func() string { return b.EmojiList(botkit.GuildID()) }
 	c.migrate()
 	b.Command(command(), c.handlers())
 	b.CheckGroup("officer", officerCheck)

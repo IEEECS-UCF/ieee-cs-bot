@@ -38,7 +38,10 @@ var Steps = map[string]string{"description": "Description", "flyer": "Flyer", "a
 var StepOrder = []string{"description", "flyer", "announcement", "checkin", "slides", "recap"}
 
 const System = `You are the officer assistant for the IEEE Computer Society student chapter at UCF, inside its Discord server.
-Officers ask you questions about the chapter, or ask you to change things: events, the chapter's Google Drive (ieeecsucf@gmail.com: files, folders, Docs, Sheets) and its Notion (pages and databases).
+Officers ask you questions about the chapter, or ask you to change things: events, the chapter's Google Drive (ieeecsucf@gmail.com: files, folders, Docs, Sheets) and its Notion (pages and databases). You can also set reminders and post messages for them.
+
+Look things up first:
+- Before you answer, or write a message for someone, look up whatever it might depend on: search the knowledge cache, read the conversation around a message, check the events. Don't answer chapter questions from assumption.
 
 Questions:
 - Search the knowledge cache before answering anything factual. It holds the server's Discord messages, the chapter's Drive documents and its Notion pages. Search again with other words if the first results miss. Use the Drive and Notion tools to read a file or page in full.
@@ -50,13 +53,17 @@ Changes:
 - Change tools don't change anything themselves. They queue the change, and it only happens when the officer who asked clicks Confirm under your reply. So describe what will change; never say it's done.
 - Deleting only moves things to Drive's or Notion's trash, where they can be restored.
 - "Set the room" means the room is confirmed, unless they say it's only requested.
-- You can't post publicly. Announcements go to other officers for review with send_announcement_for_review.
+- #announcements posts always go to other officers for review with send_announcement_for_review; never send_message there.
+- Reminders: set_reminder with the time in Eastern time, worked out from today's date. It pings whoever it's for (the asker unless they name someone; use find_member for their id) in this channel when it's due.
+- Messages: send_message posts in a channel as the bot, e.g. "tell @person ... in #general". Write mentions as <@user id> (find_member gives the id). It can't ping @everyone, @here or roles.
 
 Follow-ups:
 - Officers can reply to your answers to follow up, and each follow-up says who wrote it. Several officers may join one conversation.
 - Changes you queue in a follow-up are confirmed by the officer who wrote that follow-up.
 
-Your reply is posted as a Discord message in an officer channel. Keep it short and plain, use Discord markdown, and write people's names instead of @mentions.`
+How you talk:
+- Like the chapter's announcements: friendly and upbeat, with a kaomoji like ( ´ ▽ ｀ )ﾉ, (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧ or ( ^▽^)ノ now and then, and the server's custom emojis (listed after these instructions) where they fit, written exactly as listed. One or two per reply; don't bury the answer.
+- Your reply is posted as a Discord message in an officer channel. Keep it short, use Discord markdown, and write people's names instead of @mentions in your own replies (mentions in messages you send for officers are fine).`
 
 type schema = map[string]any
 
@@ -108,6 +115,7 @@ var Tools = func() []anthropic.BetaToolUnionParam {
 			schema{"text": str(), "event_id": str()}, "text"),
 	}
 	tools = append(tools, FileTools()...)
+	tools = append(tools, MessageTools()...)
 	tools[len(tools)-1].OfTool.CacheControl = anthropic.NewBetaCacheControlEphemeralParam()
 	return tools
 }()
@@ -174,7 +182,7 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 			OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortLow},
 			Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
 			Fallbacks:    anthropic.BetaFallbacksParamOfDefault(),
-			System:       []anthropic.BetaTextBlockParam{{Text: System}},
+			System:       a.system(),
 			Tools:        Tools, Messages: messages,
 			CacheControl: anthropic.NewBetaCacheControlEphemeralParam(),
 		})
@@ -258,6 +266,16 @@ func (a *Ask) Tool(name string, input json.RawMessage) (string, error) {
 	}
 	if result, ok, err := a.fileTool(name, input); ok {
 		return result, err
+	}
+	switch name {
+	case "set_reminder":
+		return a.setReminder(s("when"), s("text"), s("for_user_id"))
+	case "list_reminders":
+		return a.listReminders()
+	case "cancel_reminder":
+		return a.cancelReminder(s("reminder_id"))
+	case "send_message":
+		return a.sendMessage(s("channel"), s("text"))
 	}
 	if a.Events == nil {
 		return "", fmt.Errorf("the officer tools aren't loaded")

@@ -251,12 +251,11 @@ async def test_an_ai_draft_replaces_the_draft_and_still_needs_review(monkeypatch
     assert saved["ai"] and saved["status"] == review.PENDING and "with AI" in review.status_line("announcement", saved)
     assert not review.edited(saved, "changed", OTHER)["ai"]
 
-def test_ai_examples_are_officers_own_posts():
+def test_ai_examples_are_the_chosen_posts():
     from bot.utils import ai_draft
-    person = types.SimpleNamespace(author=types.SimpleNamespace(bot=False), content="x" * 100)
-    bot_post = types.SimpleNamespace(author=types.SimpleNamespace(bot=True), content="x" * 100)
-    short = types.SimpleNamespace(author=types.SimpleNamespace(bot=False), content="hi")
-    assert [ai_draft.is_example(m) for m in (person, bot_post, short)] == [True, False, False]
+    posts = ai_draft.example_posts()
+    assert len(posts) == 10 and posts[0].startswith("# Hey @everyone!")
+    assert "Discord markdown" in ai_draft.SYSTEM
     examples, details = ai_draft.prompt(["Example post"], ai_draft.details(event(), "Learn bash.", "https://d/1", "<@&111>"))
     assert "Example post" in examples["text"] and examples["cache_control"] == {"type": "ephemeral"}
     assert "Open with this mention: <@&111>" in details["text"] and "Room: ENG2 205" in details["text"]

@@ -13,6 +13,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -27,6 +28,7 @@ import (
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/pytime"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/remind"
 )
 
 const (
@@ -34,6 +36,7 @@ const (
 	DocsHours      = 3
 	Batch          = 200
 	ConfirmSeconds = 3600
+	ReminderCheck  = 30 * time.Second
 )
 
 // Message is what Entry reads from a Discord message.
@@ -117,6 +120,7 @@ func Setup(b *botkit.Bot) {
 			}
 		}
 	})
+	b.Loop("Reminders", ReminderCheck, c.sendDueReminders)
 	b.S.AddHandler(c.onMessage)
 	b.S.AddHandler(c.onMessageEdit)
 	b.S.AddHandler(c.onMessageDelete)
@@ -295,6 +299,35 @@ func (c *Cog) onMessageEdit(s *discordgo.Session, m *discordgo.MessageUpdate) {
 func (c *Cog) onMessageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 	if m.GuildID == c.guildID {
 		c.knowledge.Remove("discord:" + m.ID)
+	}
+}
+
+// ---------- reminders ----------
+
+// sendDueReminders posts each due reminder where it was set, pinging whoever
+// it's for. One that fails for a passing reason is kept for the next check;
+// one Discord refuses (the channel is gone, say) is dropped.
+func (c *Cog) sendDueReminders() {
+	due, err := remind.TakeDue(time.Now())
+	if err != nil {
+		log.Printf("Reminders: couldn't save: %v", err)
+	}
+	for _, r := range due {
+		_, err := assistant.PostMessage(c.bot, r.ChannelID, &discordgo.MessageSend{Content: botkit.Cut(assistant.ReminderText(r), 2000),
+			AllowedMentions: &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}, Users: []string{r.UserID}}})
+		if err != nil {
+			var rest *discordgo.RESTError
+			if errors.As(err, &rest) && rest.Response != nil && rest.Response.StatusCode < 500 {
+				log.Printf("Reminders: dropped %s, Discord refused it: %v", r.ID, err) // e.g. the channel is gone
+				continue
+			}
+			log.Printf("Reminders: couldn't post %s: %v", r.ID, err)
+			if _, err := remind.Add(r); err != nil {
+				log.Printf("Reminders: couldn't keep %s for later: %v", r.ID, err)
+			}
+			continue
+		}
+		log.Printf("Reminder %s posted for %s (set by %s)", r.ID, r.UserID, r.ByName)
 	}
 }
 

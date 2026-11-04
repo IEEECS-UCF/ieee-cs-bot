@@ -618,7 +618,7 @@ class DraftView(discord.ui.View):
             return
         await interaction.response.defer()
         text, why = await ai_draft.draft(self.event, event_text.plain_description(self.event),
-                                         self.discord_link, self.opener, await recent_examples(interaction.client))
+                                         self.discord_link, self.opener, ai_draft.example_posts())
         if text is None:
             await interaction.followup.send(why, ephemeral=True)
             return
@@ -627,19 +627,6 @@ class DraftView(discord.ui.View):
         await interaction.edit_original_response(
             content=f"**#announcements draft, written by Claude** (check every detail; another officer has to "
                     f"approve it before it posts)\n```md\n{text}\n```"[:2000], view=self)
-
-
-async def recent_examples(client):
-    """Recent posts by officers in #announcements, oldest first, to show Claude the house style."""
-    channel = client.get_channel(review.target_channel_id("announcement") or 0)
-    examples = []
-    if channel is not None:
-        async for message in channel.history(limit=100):
-            if ai_draft.is_example(message):
-                examples.append(message.content)
-            if len(examples) >= ai_draft.EXAMPLES:
-                break
-    return list(reversed(examples))
 
 
 # ---------- emergency posts (skip review, with a reason on record) ----------
@@ -765,7 +752,7 @@ class GeneralDraftView(discord.ui.View):
             return
         await interaction.response.defer()
         notes = getattr(self, "notes", None) or self.draft  # keep using the officer's notes on a second try
-        text, why = await ai_draft.draft_from_notes(notes, await recent_examples(interaction.client))
+        text, why = await ai_draft.draft_from_notes(notes, ai_draft.example_posts())
         if text is None:
             await interaction.followup.send(why, ephemeral=True)
             return

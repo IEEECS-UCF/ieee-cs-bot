@@ -1,18 +1,20 @@
 import os
+import json
 
 import anthropic
 
 # "Draft with AI": Claude writes an #announcements post, from an event's details
-# (event card) or an officer's notes (/officer announce), in the style of recent
-# posts by officers. The draft still goes through officer review like any other
+# (event card) or an officer's notes (/officer announce), in the style of a fixed
+# set of the chapter's best past posts (chosen by the chair; the Go bot embeds the
+# same file). The draft still goes through officer review like any other
 # (bot/officer/review.py).
 
 MODEL = "claude-sonnet-5-5"
-EXAMPLES = 12          # recent officer posts shown as the house style
-EXAMPLE_MIN_CHARS = 80  # skip one-liners
+EXAMPLES_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "internal", "aidraft", "announcement_examples.json")
 
 SYSTEM = """You write #announcements posts for a university student chapter's Discord server.
-Match the style of the example posts you're given: their layout, headings, emoticons, length and tone.
+Match the style of the example posts you're given (the chapter's best past announcements): their layout, headings, emoticons, length and tone.
+Format with Discord markdown: a # or ## heading for the event or topic, **bold** for the date, time and room, and - bullet lists when there are several items.
 
 Rules:
 - Use only the facts in the event details. Never invent speakers, food, prizes, prerequisites or anything else.
@@ -24,16 +26,17 @@ Rules:
 def configured():
     return bool(os.getenv("ANTHROPIC_API_KEY"))
 
-def is_example(message):
-    """A past announcement written by a person, long enough to show the style."""
-    return not message.author.bot and len(message.content) >= EXAMPLE_MIN_CHARS
+def example_posts():
+    """The chosen example announcements, in the file's order."""
+    with open(EXAMPLES_FILE, encoding="utf-8") as f:
+        return [e["text"] for e in json.load(f)]
 
 def prompt(examples, ask):
-    """The user turn: the example posts first (cached, since they rarely change between
+    """The user turn: the example posts first (cached, since they never change between
     drafts), then what to write."""
     shown = "\n\n".join(f"<example>\n{text}\n</example>" for text in examples) or "(none yet)"
     return [
-        {"type": "text", "text": f"Recent posts in #announcements:\n{shown}", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": f"Example posts from #announcements:\n{shown}", "cache_control": {"type": "ephemeral"}},
         {"type": "text", "text": ask},
     ]
 

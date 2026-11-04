@@ -138,33 +138,6 @@ func draftEdit(p poster) *botkit.Modal {
 	})
 }
 
-// recentExamples is recent posts by officers in #announcements, oldest first,
-// to show Claude the house style.
-func (c *Cog) recentExamples() []string {
-	id := off.TargetChannelID("announcement")
-	if id == 0 {
-		return nil
-	}
-	messages, err := c.bot.S.ChannelMessages(botkit.S(id), 100, "", "", "")
-	if err != nil {
-		log.Printf("Could not read #announcements for AI examples: %v", err)
-		return nil
-	}
-	var examples []string
-	for _, m := range messages {
-		if aidraft.IsExample(m.Author != nil && m.Author.Bot, m.Content) {
-			examples = append(examples, m.Content)
-		}
-		if len(examples) >= aidraft.Examples {
-			break
-		}
-	}
-	for i, j := 0, len(examples)-1; i < j; i, j = i+1, j-1 {
-		examples[i], examples[j] = examples[j], examples[i]
-	}
-	return examples
-}
-
 func sentForReview(link string) string {
 	return "Sent for review: " + link + "\nIt posts once an officer other than you approves it."
 }
@@ -241,7 +214,7 @@ func (d *eventDraft) sendOnce(ctx *botkit.Ctx, text string) string {
 
 // withAI replaces the draft with one Claude writes in the style of recent #announcements posts.
 func (d *eventDraft) withAI(ctx *botkit.Ctx) {
-	text, why := aiDraft(d.event, eventtext.PlainDescription(d.event), d.discordLink, d.opener, d.cog.recentExamples())
+	text, why := aiDraft(d.event, eventtext.PlainDescription(d.event), d.discordLink, d.opener, aidraft.ExamplePosts())
 	if text == "" {
 		followup(ctx, why)
 		return
@@ -387,7 +360,7 @@ func (g *generalDraft) withAI(ctx *botkit.Ctx) {
 		notes = g.text
 	}
 	g.mu.Unlock()
-	text, why := aiDraftFromNotes(notes, g.cog.recentExamples())
+	text, why := aiDraftFromNotes(notes, aidraft.ExamplePosts())
 	if text == "" {
 		followup(ctx, why)
 		return

@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "GBM",
+    "date": "2026-09-15",
+    "text": "# Hey @everyone! \n# ( ´ ▽ ` )ﾉ\n\n## First GBM! <a:CombuterSociety:1459834887077888137> \n\nJoin us for the first **General Body Meeting** of this year! We’ll be laying out our vision for the year, discussing our technical roadmap, and showing you how to get involved! (>ᴗ•)\n- When: **Thursday, 9/24 @ 6:30 PM**\n- Location: **ENG2 205**\n\nWe hope to see you there! ( ๑>ᴗ<๑ )"
+  },
+  {
+    "kind": "GBM",
+    "date": "2026-10-20",
+    "text": "# Hey @everyone!\n# ( ´ ▽ ` )ﾉ\n\n## Our next General Body Meeting is this week! <:ComputerSociety:1436195731210768436>\n\n📅 Thursday, 10/22\n🕡 6:30 PM\n📍 ENG2-205\n\nAll are welcome, so bring a friend! (>ᴗ•)\n\n## Intro to GPU Kernel Development ٩(ˊᗜˋ*)و\nThis GBM will include an intro to GPU kernel development with HIP and CUDA! We'll cover how GPUs actually run your code and what it takes to start writing your own kernels. Whether you've never touched a GPU or you're just curious how they get so much done at once, come check it out!\n\nQuestions? Ask in ⁠general or message any officer. See you Thursday! (｡•̀ᴗ-)✧"
+  },
+  {
+    "kind": "workshop",
+    "date": "2026-10-06",
+    "text": "# <:ComputerSociety:1436195731210768436>  Hello @everyone!  <:ComputerSociety:1436195731210768436> \n## Intro to Embedded Workshop!!!\n\nCome join us for Intro to Embedded, a hands-on workshop introducing anyone interested to the world of embedded systems, the tiny computers hiding inside everything from microwaves to cars to game controllers. This is meant to be an incredibly beginner friendly workshop, so even if you have **no** experience with hardware or microcontrollers that's perfectly fine.\n\n## What will we be going over?\n\nWe will be going over what embedded systems are, why they're everywhere, and how to get started programming a microcontroller with Arduino. We will help you understand basic terminology and just about everything you will need to know to start building your own projects.\n\n## Before you come\n\nPlease try to install the **Arduino IDE** ahead of time so we can jump right in! You can download it for free here: https://www.arduino.cc/en/software\n\n## When and where?\n\nIntro to Embedded will take place in HS1-272 at 5:00 PM on Thursday 10/8. Can't wait to see everyone!"
+  },
+  {
+    "kind": "workshop",
+    "date": "2026-04-11",
+    "text": "# Hey @everyone! \n# (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧\n\n## Intro to the Zig Programming Language\n\nReady to learn something new? Join us for the kick-off of our brand new Uncommon Programming Language series! We'll be diving into languages that can be incredibly useful, but aren't typically taught in class or widely known by students. First up on the roster is Zig! (✧ω✧)\n\n- Tuesday, April 14 @ 6:00 PM\n- HS1 126\n\n## IEEE CS UCF x IEEE CS Orlando LinkedIn Workshop\nWe're teaming up with Computer Society Orlando for a virtual workshop all about LinkedIn. Come learn exactly what industry professionals and recruiters are looking for, and how to make your profile stand out from the crowd! (•̀ᴗ•́)و ̑̑\n\n- Thursday, April 23 @ 6:00 PM\n- Via Zoom\n\n## See You There! \nヾ(＾-＾)ノ"
+  },
+  {
+    "kind": "social / co-host",
+    "date": "2026-04-04",
+    "text": "# Hey @everyone! \n# ( ^▽^)ノ\n\n## Hack@UCF x Computer Society MS Paint Social\n\nPut your digital art skills to the ultimate test! We're teaming up with Hack@UCF for a night of MS Paint chaos. Hang out with Computer Society and Hack@UCF while drawing your best (or worst) masterpieces. **Mouse/Trackpad ONLY**! ( • ̀ω•́ )✧\n\n* **Prizes** for the best and funniest designs!\n* **Snacks and drinks** will be provided! >:)\n* **Where:** ENG1 186 \n* **When:** Wednesday, April 8 @ 6:00 PM\n\n## ACM x IEEE Board Game Night II\n\nNext up, join us, IEEE, and ACM for our second Board Game Night! This is the perfect chance to take a break from classes, hang out with your fellow peers, and show off your board game skills. (≧◡≦)\n\n* **When:** Friday, April 10th @ 6:00 PM \n* **Where:** TA 221\n\n## See You There! \n(ノ^o^)ノ*:・゜☆"
+  },
+  {
+    "kind": "after an event",
+    "date": "2026-10-24",
+    "text": "# Hey @everyone!\n# ( ´ ▽ ` )ﾉ\n## GPU Kernel Workshop Materials <:ComputerSociety:1436195731210768436>\nThank you to everyone who came out to GBM #2! If you missed it, or just want to play with kernels, all the materials from the Intro to GPU Kernel Development workshop are now up on our GitHub! (>ᴗ•)\n\nhttps://github.com/IEEECS-UCF/Intro-to-GPU-Kernels\n\nDrop any questions in <#1424604734505095190>  ٩(ˊᗜˋ*)و\n\n## 🎃 Halloween Social 🎃\nWe're teaming up with ACM, IEEE Women in Engineering, and SPCB for a spooky night of food, games, and a **costume contest**! Come in your best costume and hang out with your fellow members! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧\n\n📅 Tuesday, 10/27\n🕢 7:30 PM\n📍 ENG2-102\n\nBring a friend! ( ๑>ᴗ<๑ )\n\n## See You There!\nヾ(＾-＾)ノ"
+  },
+  {
+    "kind": "opportunity",
+    "date": "2026-10-30",
+    "text": "@everyone\n# Free money alert! <:ComputerSociety:1436195731210768436>\n## Two IEEE Computer Society awards close TOMORROW (Oct 31)\n\n**UPE/CS Student Award:** up to **four $1,000 awards**. Open to full-time IEEE CS undergrad and grad students with a **3.0+ GPA**. Judged on grades and computing-related extracurriculars (yes, club stuff counts!) (•̀ᴗ•́)و\nhttps://www.computer.org/volunteering/awards/scholarships/upe-student-award\n\n**Lance Stafford Larson Best Student Paper Contest:** $500 for first place in both the undergrad and grad categories. Got a computing paper lying around? Send it in!\nhttps://www.computer.org/volunteering/awards/scholarships/larson\n\nNot a CS member yet? Use code `CSCONF27S` at computer.org and message an officer with your member number ( ๑>ᴗ<๑ )"
+  },
+  {
+    "kind": "recruiting",
+    "date": "2026-08-01",
+    "text": "## Hey @everyone! <a:CombuterSociety:1459834887077888137> \n# Want an officer position?<:KaomojiWink:1465189626569560289> \nOur current outreach chair has unfortunately died (graduated) 😔. \nResponsibilities include:\n- reaching out to companies and potential society partners\n- planning and hosting member recruitment events \n- whatever other things come up that fall under the domain of “outreach”\nIEEE CS membership is preferred, DM me if you are interested. The term lasts until January officer turnover. <:KaomojiHappy:1465187310118109205>"
+  },
+  {
+    "kind": "weekly roundup",
+    "date": "2026-03-23",
+    "text": "# Hey @everyone!\n# ( ´ ▽ ` )ﾉ\n\n## Events This Week\n\nGet ready for an action-packed week ahead! We have some amazing things lined up for you to get involved and learn. (>ᴗ•)\n\n## General Body Meeting \n\nJoin us for our next [GBM](https://discord.gg/httkzjV7p?event=1481069717107249202)! Alongside our regular updates, we will be hosting a lecture diving into operating systems principles. And yes, there will be more Red Bull for everyone in attendance! ( ๑>ᴗ<๑ )\n- When: Tuesday @ 7:00 PM\n- Location: HS1 106\n\n## Workshop: Formal Verification with AMD\n\nDon't miss out on our very first [workshop](https://discord.gg/httkzjV7p?event=1479348250023821383)! We are teaming up with AMD to explore the world of Formal Verification. Come learn, ask questions, and build your technical skills! ٩(◕‿◕)۶\n- When: Wednesday @ 7:00 PM\n- Location: HS1 215"
+  },
+  {
+    "kind": "day-of reminder",
+    "date": "2026-09-24",
+    "text": "@everyone \n## GBM Tonight!!!!!!\nENG2 205 @ 6:30PM\n<a:CombuterSociety:1459834887077888137> <a:Yay:1506055001401852038> <a:patpat:1460575054872969380>"
+  }
+]

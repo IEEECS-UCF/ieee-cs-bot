@@ -173,10 +173,13 @@ func TestAnAIDraftReplacesTheDraftAndStillNeedsReview(t *testing.T) {
 	}
 }
 
-func TestAIExamplesAreOfficersOwnPosts(t *testing.T) {
-	long := strings.Repeat("x", 100)
-	if got := []bool{aidraft.IsExample(false, long), aidraft.IsExample(true, long), aidraft.IsExample(false, "hi")}; !slices.Equal(got, []bool{true, false, false}) {
-		t.Errorf("examples %v", got)
+func TestAIExamplesAreTheChosenPosts(t *testing.T) {
+	posts := aidraft.ExamplePosts()
+	if len(posts) != 10 || !strings.HasPrefix(posts[0], "# Hey @everyone!") {
+		t.Errorf("%d example posts, first %q", len(posts), posts[0][:20])
+	}
+	if !strings.Contains(aidraft.System, "Discord markdown") {
+		t.Error("the prompt doesn't ask for Discord formatting")
 	}
 	parts := aidraft.Prompt([]string{"Example post"}, aidraft.Details(event(), "Learn bash.", "https://d/1", "<@&111>"))
 	examples, _ := json.Marshal(parts[0])
