@@ -45,19 +45,10 @@ func (a *Ask) system() []anthropic.BetaTextBlockParam {
 
 // ---------- reminders ----------
 
-var maxAhead = 366 * 24 * time.Hour
-
 func (a *Ask) setReminder(when, text, forUserID string) (string, error) {
-	at, err := time.ParseInLocation("2006-01-02 15:04", strings.TrimSpace(when), TZ())
+	at, err := remind.ParseWhen(when, time.Now().In(TZ()))
 	if err != nil {
-		return "", fmt.Errorf("when must be YYYY-MM-DD HH:MM in Eastern time, not %q", when)
-	}
-	now := time.Now().In(TZ())
-	if !at.After(now) {
-		return "", fmt.Errorf("%s is already past", pytime.Strftime(at, "%a %b %-d, %-I:%M %p"))
-	}
-	if at.Sub(now) > maxAhead {
-		return "", fmt.Errorf("that's more than a year away")
+		return "", err
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {

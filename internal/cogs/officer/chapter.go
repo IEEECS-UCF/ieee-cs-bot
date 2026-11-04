@@ -18,7 +18,8 @@ import (
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/volunteer"
 )
 
-// /officer chapter: deadlines, tabling, volunteer tasks, members and the monthly report.
+// /officer chapter: deadlines, tabling, volunteer tasks, members, reminders,
+// officer access and the monthly report.
 
 type chapter struct {
 	cog        *Cog
@@ -44,6 +45,8 @@ func (c *Cog) newChapter() *chapter {
 		}),
 		botkit.NewRow,
 		v.Button("Tabling names", discordgo.SecondaryButton, ch.tablingNames),
+		v.Button("Reminders", discordgo.SecondaryButton, ch.reminders),
+		v.Button("Officer access", discordgo.SecondaryButton, ch.officerAccess),
 	)
 	return ch
 }

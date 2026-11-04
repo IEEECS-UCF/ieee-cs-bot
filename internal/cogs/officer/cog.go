@@ -33,6 +33,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"google.golang.org/api/calendar/v3"
 
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/access"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/aidraft"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/checkin"
@@ -234,6 +235,11 @@ func officerCheck(ctx *botkit.Ctx) bool {
 		return true
 	}
 	user := ctx.User()
+	if access.Has(user.ID) {
+		log.Printf("Refused /officer for %s (%s): blocked by an admin", user.String(), user.ID)
+		ctx.Ephemeral("A server admin has turned off your access to the officer tools.")
+		return false
+	}
 	log.Printf("Refused /officer for %s (%s): no officer role", user.String(), user.ID)
 	ctx.Ephemeral("These commands are for officers only.")
 	return false
@@ -258,7 +264,7 @@ func command() *discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "announce", Description: "Write an #announcements post. Another officer approves it before it posts.",
 				Options: []*discordgo.ApplicationCommandOption{{Type: discordgo.ApplicationCommandOptionAttachment, Name: "image",
 					Description: "An image to post with it (optional)"}}},
-			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "chapter", Description: "Deadlines, tabling, volunteer tasks, members and the monthly report."},
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "chapter", Description: "Deadlines, tabling, volunteer tasks, members, reminders and the monthly report."},
 		},
 	}
 }

@@ -33,6 +33,13 @@ func TestOnlyOfficersCanFollowUp(t *testing.T) {
 	if c, why := cs.followUpTarget(reply(person, "c1", "answer"), member, now); c != nil || why != "not an officer" {
 		t.Errorf("a member's reply was accepted (%q)", why)
 	}
+	old := botkit.Blocked
+	botkit.Blocked = func(id string) bool { return id == "5" }
+	c, why := cs.followUpTarget(reply(person, "c1", "answer"), officer, now)
+	botkit.Blocked = old
+	if c != nil || why != "not an officer" {
+		t.Errorf("a blocked officer's reply was accepted (%q)", why)
+	}
 	if c, _ := cs.followUpTarget(reply(person, "c1", "answer"), nil, now); c != nil {
 		t.Error("a reply with no member info was accepted")
 	}

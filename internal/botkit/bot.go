@@ -301,9 +301,13 @@ func OfficerRoleIDs() map[string]bool {
 	return ids
 }
 
-// IsOfficer reports whether the member has an officer role.
+// Blocked reports whether a server admin has blocked the user from the
+// officer tools (main sets it to access.Has).
+var Blocked = func(userID string) bool { return false }
+
+// IsOfficer reports whether the member has an officer role and isn't blocked.
 func IsOfficer(m *discordgo.Member) bool {
-	if m == nil {
+	if m == nil || (m.User != nil && Blocked(m.User.ID)) {
 		return false
 	}
 	officer := OfficerRoleIDs()

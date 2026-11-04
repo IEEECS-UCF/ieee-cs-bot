@@ -6,6 +6,7 @@ package remind
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,6 +26,25 @@ type Reminder struct {
 }
 
 var mu sync.Mutex
+
+// MaxAhead is how far ahead a reminder can be set.
+var MaxAhead = 366 * 24 * time.Hour
+
+// ParseWhen reads "YYYY-MM-DD HH:MM" in now's time zone and checks it's in
+// the future and within MaxAhead.
+func ParseWhen(when string, now time.Time) (time.Time, error) {
+	at, err := time.ParseInLocation("2006-01-02 15:04", strings.TrimSpace(when), now.Location())
+	if err != nil {
+		return time.Time{}, fmt.Errorf("when must be YYYY-MM-DD HH:MM in Eastern time, not %q", when)
+	}
+	if !at.After(now) {
+		return time.Time{}, fmt.Errorf("%s is already past", at.Format("Mon Jan 2, 3:04 PM"))
+	}
+	if at.Sub(now) > MaxAhead {
+		return time.Time{}, fmt.Errorf("that's more than a year away")
+	}
+	return at, nil
+}
 
 func load() []Reminder { return store.Load(File, []Reminder{}) }
 

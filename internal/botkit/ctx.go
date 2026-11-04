@@ -61,6 +61,12 @@ func (c *Ctx) Member() *discordgo.Member { return c.I.Member }
 // IsOfficer reports whether the user has an officer role.
 func (c *Ctx) IsOfficer() bool { return IsOfficer(c.I.Member) }
 
+// IsAdmin reports whether the user has Administrator in the server (the
+// server owner does too).
+func (c *Ctx) IsAdmin() bool {
+	return c.I.Member != nil && c.I.Member.Permissions&discordgo.PermissionAdministrator != 0
+}
+
 // CustomID of the pressed component or submitted modal.
 func (c *Ctx) CustomID() string {
 	switch c.I.Type {

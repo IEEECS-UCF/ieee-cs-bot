@@ -9,6 +9,7 @@ import (
 
 	"github.com/joho/godotenv"
 
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/access"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/assistant"
@@ -45,6 +46,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	botkit.Blocked = access.Has
 	for _, setup := range cogs {
 		setup(b)
 	}

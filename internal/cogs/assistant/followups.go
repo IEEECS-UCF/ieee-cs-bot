@@ -78,7 +78,8 @@ func (cs *conversations) followUpTarget(m *discordgo.Message, member *discordgo.
 	if c == nil {
 		return nil, ""
 	}
-	if !botkit.IsOfficer(member) {
+	// A message's member has no user, so IsOfficer can't see a block: check the author
+	if !botkit.IsOfficer(member) || botkit.Blocked(m.Author.ID) {
 		return nil, "not an officer"
 	}
 	if m.ChannelID != c.channelID {
