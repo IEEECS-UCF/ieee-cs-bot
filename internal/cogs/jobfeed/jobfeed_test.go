@@ -19,7 +19,7 @@ import (
 )
 
 // python.json is what the Python helpers return for the same inputs
-// (internal/jobs/testdata/python_expect.py writes it).
+// (written by a script removed with the Python bot).
 type golden struct {
 	Topics      map[string][]string `json:"topics"`
 	Track       map[string]*string  `json:"track"`

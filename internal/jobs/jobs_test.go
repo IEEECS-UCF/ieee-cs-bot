@@ -14,7 +14,7 @@ import (
 )
 
 // python.json is what the Python helpers return for the same inputs
-// (testdata/python_expect.py writes it).
+// (written by a script removed with the Python bot).
 type golden struct {
 	Classify         map[string]*string         `json:"classify"`
 	Terms            map[string][]string        `json:"terms"`
