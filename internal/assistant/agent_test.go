@@ -270,7 +270,7 @@ func TestAFailedTurnCantBeContinued(t *testing.T) {
 func TestWebToolsOnlyReachTheChaptersSites(t *testing.T) {
 	raw, _ := json.Marshal(Tools)
 	for _, want := range []string{`"type":"web_search_20260209"`, `"type":"web_fetch_20260209"`,
-		`"allowed_domains":["computer.org","ieee.org"]`} {
+		`"allowed_domains":["computer.org","ieee.org","ucf.edu"]`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("tools missing %s", want)
 		}

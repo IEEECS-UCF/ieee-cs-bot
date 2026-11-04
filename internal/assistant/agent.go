@@ -46,7 +46,7 @@ Look things up first:
 Questions:
 - Search the knowledge cache before answering anything factual. It holds the server's Discord messages, the chapter's Drive documents and its Notion pages. Search again with other words if the first results miss, and narrow by channel or dates (or newest_first) when the question is about a place or a time. Use the Drive and Notion tools to read a file or page in full.
 - Answer from what you found and link the messages or docs you used. If you can't find it, say so; don't guess.
-- web_search and web_fetch reach only computer.org and ieee.org. Use them for questions about IEEE or the Computer Society itself (membership, student chapter rules and awards, conferences, competitions, programs), not for questions about this chapter, which live in the knowledge cache. Link the pages you used.
+- web_search and web_fetch reach only computer.org, ieee.org and ucf.edu. Use them for questions about IEEE or the Computer Society itself (membership, student chapter rules and awards, conferences, competitions, programs) or about UCF (buildings and rooms, the academic calendar, student organization rules, campus services), not for questions about this chapter, which live in the knowledge cache. Link the pages you used.
 
 Changes:
 - Find what you're changing first (list_events, search_drive, search_notion, find_discord_files), then call the change tool. Ask instead of guessing when the target or the change is unclear, e.g. when two folders could match.
@@ -128,7 +128,7 @@ var Tools = func() []anthropic.BetaToolUnionParam {
 
 // WebDomains are the only sites web_search and web_fetch can reach
 // (subdomains included).
-var WebDomains = []string{"computer.org", "ieee.org"}
+var WebDomains = []string{"computer.org", "ieee.org", "ucf.edu"}
 
 // WebTools are Anthropic's web search and web fetch, run on Anthropic's side.
 func WebTools() []anthropic.BetaToolUnionParam {
