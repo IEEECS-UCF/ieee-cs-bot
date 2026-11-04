@@ -36,12 +36,19 @@ func FileTools() []anthropic.BetaToolUnionParam {
 				"from_asker": schema{"type": "boolean", "description": "Only files the asker posted"},
 				"limit":      schema{"type": "integer", "minimum": 1, "maximum": 25}}, "channel"),
 		// Drive reads
-		tool("search_drive", "Search the chapter's Google Drive (ieeecsucf@gmail.com) by name or contents. Returns id | name | kind | last changed | link.",
-			schema{"text": s, "kind": enum("any", "folder", "doc", "sheet", "slides", "pdf", "image"),
+		tool("search_drive", "Search the chapter's Google Drive (ieeecsucf@gmail.com) by name or contents. Returns id | name | kind | last changed | link. With folder_id and no text, it lists the folder.",
+			schema{"text": s, "kind": enum("any", "folder", "doc", "sheet", "slides", "form", "pdf", "image"),
 				"folder_id": str("Only inside this folder")}),
 		tool("read_drive_file", "The text of a Google Doc, Sheet (as CSV), Slides deck or text file.", schema{"file_id": s}, "file_id"),
 		tool("read_sheet", "Cells of a Google Sheet, as rows. Range like 'Attendance!A1:F50'; the first tab if left out.",
 			schema{"sheet_id": s, "range": s}, "sheet_id"),
+		tool("read_google_form", "A Google Form's questions (with their types and options), its edit link, the link to send people, and its responses sheet if it has one.",
+			schema{"form_id": s}, "form_id"),
+		tool("read_form_responses", "A Google Form's responses, newest first, each with every answer.",
+			schema{"form_id": s, "limit": schema{"type": "integer", "minimum": 1, "maximum": 100}}, "form_id"),
+		tool("search_drive_trash", "Search Drive's trash by name (things deleted in the last 30 days), to find something to restore.",
+			schema{"text": s}),
+		tool("drive_file_access", "Who a file or folder is shared with, and as what.", schema{"file_id": s}, "file_id"),
 		// Drive writes
 		tool("save_discord_file_to_drive", "Queue copying a file attached to a Discord message into a Drive folder.",
 			schema{"message_url": s, "folder_id": s, "attachment": str("File name, or its number from find_discord_files; the first file if left out"),
@@ -60,6 +67,24 @@ func FileTools() []anthropic.BetaToolUnionParam {
 		tool("append_to_google_doc", "Queue adding text to the end of a Google Doc.", schema{"doc_id": s, "text": s}, "doc_id", "text"),
 		tool("append_sheet_rows", "Queue adding rows to the bottom of a Google Sheet tab.",
 			schema{"sheet_id": s, "rows": schema{"type": "array", "items": schema{"type": "array", "items": s}}, "tab": s}, "sheet_id", "rows"),
+		tool("create_google_form", "Queue creating a Google Form with these questions. Returns the edit link and the link to send people once it's made. The API can't make file upload questions; ask for a link (e.g. to a Drive file) instead.",
+			schema{"title": s, "description": s, "questions": formQuestionsSchema(), "folder_id": s}, "title", "questions"),
+		tool("add_form_questions", "Queue adding questions to the end of an existing Google Form.",
+			schema{"form_id": s, "questions": formQuestionsSchema()}, "form_id", "questions"),
+		tool("create_google_sheet", "Queue creating a Google Sheet; the first row is usually the headers.",
+			schema{"title": s, "rows": rowsSchema(), "folder_id": s}, "title"),
+		tool("update_sheet_cells", "Queue writing rows over cells, starting at the top-left of range (e.g. 'Attendance!B2'). Overwrites what's there; formulas work.",
+			schema{"sheet_id": s, "range": s, "rows": rowsSchema()}, "sheet_id", "range", "rows"),
+		tool("add_sheet_tab", "Queue adding a tab to a Google Sheet.", schema{"sheet_id": s, "name": s}, "sheet_id", "name"),
+		tool("replace_in_google_doc", "Queue replacing every occurrence of some text in a Google Doc (matching case). An empty replacement deletes it.",
+			schema{"doc_id": s, "find": s, "replace": s}, "doc_id", "find"),
+		tool("create_google_slides", "Queue creating a Google Slides deck with a title-and-body slide for each entry (body lines become separate paragraphs).",
+			schema{"title": s, "slides": schema{"type": "array", "items": schema{"type": "object",
+				"properties": schema{"title": s, "body": s}}}, "folder_id": s}, "title", "slides"),
+		tool("restore_drive_file", "Queue taking a file or folder out of Drive's trash (find it with search_drive_trash).",
+			schema{"file_id": s}, "file_id"),
+		tool("unshare_drive_file", "Queue removing someone's access to a file or folder (by email, or 'anyone' for a public link). Check drive_file_access first.",
+			schema{"file_id": s, "email": s}, "file_id", "email"),
 		// Notion reads
 		tool("search_notion", "Search the chapter's Notion for pages or databases by title. Returns id | kind | title | link | last edited.",
 			schema{"text": s, "kind": enum("any", "page", "database")}),
@@ -79,6 +104,61 @@ func FileTools() []anthropic.BetaToolUnionParam {
 		tool("add_discord_file_to_notion", "Queue adding a file attached to a Discord message to the end of a Notion page (images show inline).",
 			schema{"message_url": s, "page_id": s, "attachment": s, "caption": s}, "message_url", "page_id"),
 	}
+}
+
+func rowsSchema() schema {
+	return schema{"type": "array", "items": schema{"type": "array", "items": str()}}
+}
+
+func formQuestionsSchema() schema {
+	return schema{"type": "array", "items": schema{"type": "object", "properties": schema{
+		"title":      str(),
+		"type":       enum(FormKinds...),
+		"help":       str("Help text under the question"),
+		"options":    schema{"type": "array", "items": str(), "description": "For multiple_choice, checkboxes and dropdown"},
+		"required":   schema{"type": "boolean"},
+		"scale_low":  schema{"type": "integer", "description": "linear_scale: 0 or 1 (default 1)"},
+		"scale_high": schema{"type": "integer", "description": "linear_scale: 2 to 10 (default 5)"},
+		"low_label":  str(),
+		"high_label": str(),
+	}, "required": []string{"title", "type"}}}
+}
+
+// formQuestions reads the questions argument.
+func formQuestions(v any) []FormQuestion {
+	var out []FormQuestion
+	for _, raw := range asList(v) {
+		o := asObj(raw)
+		if o == nil {
+			continue
+		}
+		q := FormQuestion{Title: asStr(o.get("title")), Kind: asStr(o.get("type")), Help: asStr(o.get("help")),
+			Required: truthy(o.get("required")), LowLabel: asStr(o.get("low_label")), HighLabel: asStr(o.get("high_label"))}
+		for _, opt := range asList(o.get("options")) {
+			q.Options = append(q.Options, pyStr(opt))
+		}
+		if n, err := strconv.ParseFloat(pyStr(o.get("scale_low")), 64); err == nil {
+			q.Low = int64(n)
+		}
+		if n, err := strconv.ParseFloat(pyStr(o.get("scale_high")), 64); err == nil {
+			q.High = int64(n)
+		}
+		out = append(out, q)
+	}
+	return out
+}
+
+// rowsArg reads a rows argument as text cells.
+func rowsArg(v any) [][]string {
+	var rows [][]string
+	for _, r := range asList(v) {
+		row := []string{}
+		for _, c := range asList(r) {
+			row = append(row, pyStr(c))
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 func DriveConfigured() bool  { return drive.configured() }
@@ -230,6 +310,45 @@ func init() {
 				rows = append(rows, row)
 			}
 			return a.appendSheetRows(x.s("sheet_id"), rows, x.s("tab"))
+		},
+		"read_google_form": func(a *Ask, x fileArgs) (string, error) { return a.readGoogleForm(x.s("form_id")) },
+		"read_form_responses": func(a *Ask, x fileArgs) (string, error) {
+			limit := 25
+			if n, err := strconv.ParseFloat(x.s("limit"), 64); err == nil {
+				limit = int(n)
+			}
+			return a.readFormResponses(x.s("form_id"), max(1, min(limit, 100)))
+		},
+		"search_drive_trash": func(a *Ask, x fileArgs) (string, error) { return a.searchDriveTrash(x.s("text")) },
+		"drive_file_access":  func(a *Ask, x fileArgs) (string, error) { return a.driveFileAccess(x.s("file_id")) },
+		"create_google_form": func(a *Ask, x fileArgs) (string, error) {
+			return a.createGoogleForm(x.s("title"), x.s("description"), formQuestions(x.o.get("questions")), x.s("folder_id"))
+		},
+		"add_form_questions": func(a *Ask, x fileArgs) (string, error) {
+			return a.addFormQuestions(x.s("form_id"), formQuestions(x.o.get("questions")))
+		},
+		"create_google_sheet": func(a *Ask, x fileArgs) (string, error) {
+			return a.createGoogleSheet(x.s("title"), rowsArg(x.o.get("rows")), x.s("folder_id"))
+		},
+		"update_sheet_cells": func(a *Ask, x fileArgs) (string, error) {
+			return a.updateSheetCells(x.s("sheet_id"), x.s("range"), rowsArg(x.o.get("rows")))
+		},
+		"add_sheet_tab": func(a *Ask, x fileArgs) (string, error) { return a.addSheetTab(x.s("sheet_id"), x.s("name")) },
+		"replace_in_google_doc": func(a *Ask, x fileArgs) (string, error) {
+			return a.replaceInGoogleDoc(x.s("doc_id"), x.s("find"), asStr(x.o.get("replace")))
+		},
+		"create_google_slides": func(a *Ask, x fileArgs) (string, error) {
+			var specs []SlideSpec
+			for _, raw := range asList(x.o.get("slides")) {
+				if o := asObj(raw); o != nil {
+					specs = append(specs, SlideSpec{Title: asStr(o.get("title")), Body: asStr(o.get("body"))})
+				}
+			}
+			return a.createGoogleSlides(x.s("title"), specs, x.s("folder_id"))
+		},
+		"restore_drive_file": func(a *Ask, x fileArgs) (string, error) { return a.restoreDriveFile(x.s("file_id")) },
+		"unshare_drive_file": func(a *Ask, x fileArgs) (string, error) {
+			return a.unshareDriveFile(x.s("file_id"), x.s("email"))
 		},
 		"search_notion":    func(a *Ask, x fileArgs) (string, error) { return a.searchNotion(x.s("text"), x.s("kind")) },
 		"read_notion_page": func(a *Ask, x fileArgs) (string, error) { return a.readNotionPage(x.s("page_id")) },

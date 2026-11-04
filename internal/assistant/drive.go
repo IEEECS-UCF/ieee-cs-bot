@@ -35,7 +35,7 @@ import (
 
 const (
 	DriveTokenFile = "credentials/drive_user.json"
-	DriveScope     = "https://www.googleapis.com/auth/drive" // also covers the Docs and Sheets APIs
+	DriveScope     = "https://www.googleapis.com/auth/drive" // also covers the Docs, Sheets, Slides and Forms APIs
 	FolderMime     = "application/vnd.google-apps.folder"
 	DocMime        = "application/vnd.google-apps.document"
 	SheetMime      = "application/vnd.google-apps.spreadsheet"
@@ -54,7 +54,7 @@ var driveExport = map[string]string{
 var drivePlain = map[string]bool{"text/plain": true, "text/markdown": true, "text/csv": true, "application/json": true}
 
 // driveKinds is KINDS, in its order (describe takes the first match).
-var driveKinds = []kv{{"folder", FolderMime}, {"doc", DocMime}, {"sheet", SheetMime}, {"slides", SlidesMime},
+var driveKinds = []kv{{"folder", FolderMime}, {"doc", DocMime}, {"sheet", SheetMime}, {"slides", SlidesMime}, {"form", FormMime},
 	{"pdf", "application/pdf"}, {"image", "image/"}}
 
 // The Drive calls the file tools and the knowledge cache make, by name like
@@ -76,9 +76,25 @@ var drive = struct {
 	copy             func(fileID, name, folderID string) (string, error)
 	trash            func(fileID string) error
 	share            func(fileID, email, role string) error
+	// drive_more.go
+	createForm       func(title, description string, questions []FormQuestion, folderID string) (string, string, error)
+	addFormQuestions func(formID string, questions []FormQuestion) error
+	readForm         func(formID string) (string, error)
+	formResponses    func(formID string, limit int) (string, error)
+	createSheet      func(title string, rows [][]string, folderID string) (string, error)
+	updateCells      func(sheetID, cellRange string, rows [][]string) error
+	addTab           func(sheetID, name string) error
+	replaceInDoc     func(docID, find, replace string) (int64, error)
+	createSlides     func(title string, specs []SlideSpec, folderID string) (string, error)
+	searchTrash      func(text string, limit int) ([]string, error)
+	restore          func(fileID string) error
+	permissions      func(fileID string) ([]Access, error)
+	unshare          func(fileID, permissionID string) error
 }{driveConfigured, driveSearch, driveInfo, driveRead, driveSheetValues, driveChangedDocuments, driveUpload,
 	driveCreateFolder, driveCreateDoc, driveAppendToDoc, driveAppendRows, driveMove, driveRename, driveCopy,
-	driveTrash, driveShare}
+	driveTrash, driveShare,
+	driveCreateForm, driveAddFormQuestions, driveReadForm, driveFormResponses, driveCreateSheet, driveUpdateCells,
+	driveAddTab, driveReplaceInDoc, driveCreateSlides, driveSearchTrash, driveRestore, drivePermissions, driveUnshare}
 
 func driveConfigured() bool {
 	_, err := os.Stat(DriveTokenFile)
