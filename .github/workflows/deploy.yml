@@ -12,6 +12,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
@@ -29,7 +30,11 @@ jobs:
 
   deploy:
     needs: build
+    # A manual run from another branch only builds and tests; production runs main
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # A hung deploy would otherwise hold the deploy queue for hours
+    timeout-minutes: 10
     environment: production
     steps:
       - uses: actions/download-artifact@v4

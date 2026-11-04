@@ -168,8 +168,16 @@ func driveOptions() ([]option.ClientOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []option.ClientOption{option.WithTokenSource(ts)}, nil
+	// A time limit on every call: a request that never answers would
+	// otherwise hold /officer ask or the document refresh forever
+	client := oauth2.NewClient(context.Background(), ts)
+	client.Timeout = DriveCallTimeout
+	return []option.ClientOption{option.WithHTTPClient(client)}, nil
 }
+
+// DriveCallTimeout is how long one Drive, Docs or Sheets call may take
+// (uploads included).
+const DriveCallTimeout = 5 * time.Minute
 
 func driveService() (*drivev3.Service, error) {
 	opts, err := driveOptions()
@@ -387,12 +395,10 @@ func driveChangedDocuments(seen map[string]string) ([]Page, map[string]bool, err
 		}
 		data, err := fileText(svc, f)
 		if err != nil {
-			var ge *googleapi.Error
-			if errors.As(err, &ge) {
-				log.Printf("Knowledge: couldn't read Drive file %s: %d", f.Name, ge.Code)
-				continue
-			}
-			return nil, nil, err
+			// Skip this one file (it's tried again next refresh) rather than
+			// throw away every other file read this time
+			log.Printf("Knowledge: couldn't read Drive file %s: %v", f.Name, err)
+			continue
 		}
 		changed = append(changed, Page{f.Id, f.Name, f.WebViewLink, f.ModifiedTime, botkit.Cut(decodeText(data), DriveMaxChars)})
 	}

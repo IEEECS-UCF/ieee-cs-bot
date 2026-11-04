@@ -3,6 +3,7 @@ package officer
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -241,5 +242,23 @@ func TestASourceThatFailsKeepsItsLastGoodData(t *testing.T) {
 	KeepLastGood(first, nil)
 	if len(first.Missing) != 1 {
 		t.Errorf("missing %v", first.Missing)
+	}
+}
+
+// A change made while a refresh runs (say, deleting an event) is made again
+// on the refreshed snapshot, which was read before it.
+func TestAChangeDuringARefreshIsKept(t *testing.T) {
+	c := NewSnapshotCache(nil)
+	c.Set(NewSnapshot([]eventtext.Event{{ID: "g1"}, {ID: "g2"}}, nil, time.Now()))
+	c.UseGather(func(map[string]string, map[int64]bool) (*Snapshot, error) {
+		// An officer deletes g1 while the calendar is being read (with g1 still on it)
+		c.Change(func(s *Snapshot) {
+			s.Events = slices.DeleteFunc(s.Events, func(e eventtext.Event) bool { return e.ID == "g1" })
+		})
+		return NewSnapshot([]eventtext.Event{{ID: "g1"}, {ID: "g2"}}, nil, time.Now()), nil
+	})
+	snap, err := c.Get(true)
+	if err != nil || len(snap.Events) != 1 || snap.Events[0].ID != "g2" {
+		t.Fatalf("%v %v", snap, err)
 	}
 }

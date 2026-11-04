@@ -145,9 +145,9 @@ func Setup(b *botkit.Bot) {
 	c := New(b)
 	b.AddCog(cogapi.CalendarSyncName, c)
 	// Discord-side changes sync within a minute instead of waiting for the loop
-	b.S.AddHandler(func(*discordgo.Session, *discordgo.GuildScheduledEventCreate) { c.SyncSoon(soonDelay) })
-	b.S.AddHandler(func(*discordgo.Session, *discordgo.GuildScheduledEventUpdate) { c.SyncSoon(soonDelay) })
-	b.S.AddHandler(func(*discordgo.Session, *discordgo.GuildScheduledEventDelete) { c.SyncSoon(soonDelay) })
+	b.S.AddHandler(botkit.Safe(b, "Calendar sync", func(*discordgo.Session, *discordgo.GuildScheduledEventCreate) { c.SyncSoon(soonDelay) }))
+	b.S.AddHandler(botkit.Safe(b, "Calendar sync", func(*discordgo.Session, *discordgo.GuildScheduledEventUpdate) { c.SyncSoon(soonDelay) }))
+	b.S.AddHandler(botkit.Safe(b, "Calendar sync", func(*discordgo.Session, *discordgo.GuildScheduledEventDelete) { c.SyncSoon(soonDelay) }))
 	b.Loop("Calendar sync", SyncMinutes*time.Minute, c.syncNow)
 }
 
@@ -494,18 +494,39 @@ func (c *Cog) syncDiscordEvents(items map[string]*calendar.Event, payloads []pen
 	}
 
 	// Mapped events that fell out of the fetch window: cancelled, deleted, or moved
+	type lookup struct {
+		gid  string
+		item *calendar.Event
+	}
+	var lookups []lookup
+	gone := 0
 	for _, gid := range sortedKeys(eventMap) {
 		if seen[gid] {
 			continue
 		}
-		ev := discordEvents[eventMap[gid]]
 		item, err := c.cal.get(c.calendarID, gid)
 		if err != nil {
 			log.Printf("Could not look up calendar event %s, leaving it alone: %v", gid, err)
 			continue
 		}
-
+		if ev := discordEvents[eventMap[gid]]; (item == nil || item.Status == "cancelled") && ev != nil && ev.Status == statusScheduled {
+			gone++
+		}
+		lookups = append(lookups, lookup{gid, item})
+	}
+	// Many at once looks like a changed calendar ID or a recreated calendar,
+	// not officers cancelling events: leave the Discord events alone
+	keepGone := gone > MaxDeletionsPerSync
+	if keepGone {
+		log.Printf("Not deleting %d Discord events whose calendar events are gone (too many at once; check the calendar).", gone)
+	}
+	for _, l := range lookups {
+		gid, item := l.gid, l.item
+		ev := discordEvents[eventMap[gid]]
 		if item == nil || item.Status == "cancelled" {
+			if keepGone {
+				continue
+			}
 			if ev != nil && ev.Status == statusScheduled {
 				if err := c.deleteEvent(ev, discordEvents, "removed from Google Calendar"); err != nil {
 					return err
@@ -548,11 +569,19 @@ func (c *Cog) syncDiscordEvents(items map[string]*calendar.Event, payloads []pen
 	// leftovers from renamed events. Skip if the calendar came back empty,
 	// in case that was a fluke rather than a real empty calendar.
 	if len(payloads) > 0 {
+		var leftovers []*discordgo.GuildScheduledEvent
 		for _, ev := range byID(discordEvents) {
 			if !claimed[botkit.ID(ev.ID)] && botkit.ID(ev.CreatorID) == botID && ev.Status == statusScheduled {
-				if err := c.deleteEvent(ev, discordEvents, "duplicate or no longer on Google Calendar"); err != nil {
-					return err
-				}
+				leftovers = append(leftovers, ev)
+			}
+		}
+		if len(leftovers) > MaxDeletionsPerSync {
+			log.Printf("Not deleting %d unlinked bot events (too many at once; check the calendar).", len(leftovers))
+			leftovers = nil
+		}
+		for _, ev := range leftovers {
+			if err := c.deleteEvent(ev, discordEvents, "duplicate or no longer on Google Calendar"); err != nil {
+				return err
 			}
 		}
 	}
@@ -737,6 +766,9 @@ func (c *Cog) importDiscordEvents(discordEvents map[int64]*event, calendarTZ str
 			description += "\n\nFlyer: " + coverURL(ev)
 		}
 		body := &calendar.Event{
+			// Named after the Discord event, so a retried or repeated insert finds
+			// the one already made instead of adding a second
+			Id:          gcal.IDFor("discord", ev.ID),
 			Summary:     ev.Name,
 			Location:    fields["location"],
 			Description: description,

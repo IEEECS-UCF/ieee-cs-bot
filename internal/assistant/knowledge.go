@@ -12,8 +12,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 )
 
 // The knowledge cache /officer ask searches: every Discord message the bot
@@ -282,6 +285,27 @@ const relevance = `bm25(docs, 0, 0, 2.0, 1.0, 0, 0, 1.0)
 
 // SearchWith is Search with filters. A Discord message whose conversation is
 // also in the results is left out, so the same text doesn't show twice.
+// dayStartUTC is the start of the Eastern day YYYY-MM-DD, plus days, as a
+// UTC "YYYY-MM-DDTHH:MM:SS" (the day itself if it doesn't parse).
+func dayStartUTC(day string, days int) string {
+	d, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(day), TZ())
+	if err != nil {
+		return day
+	}
+	return d.AddDate(0, 0, days).UTC().Format("2006-01-02T15:04:05")
+}
+
+// LocalDay is the Eastern day of a stored time, YYYY-MM-DD (the first ten
+// characters if it doesn't parse).
+func LocalDay(ts string) string {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02T15:04:05.999999-07:00", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, ts); err == nil {
+			return t.In(TZ()).Format("2006-01-02")
+		}
+	}
+	return botkit.Cut(ts, 10)
+}
+
 func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error) {
 	match := FTSQuery(query)
 	if match == "" {
@@ -299,13 +323,15 @@ func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error)
 		q += " AND place LIKE ?"
 		args = append(args, "%"+place+"%")
 	}
+	// Days are Eastern (what officers mean); times are stored in UTC, so an
+	// evening message counts on the day it was sent there
 	if f.After != "" {
-		q += " AND substr(ts, 1, 10) >= ?"
-		args = append(args, f.After)
+		q += " AND substr(ts, 1, 19) >= ?"
+		args = append(args, dayStartUTC(f.After, 0))
 	}
 	if f.Before != "" {
-		q += " AND substr(ts, 1, 10) <= ?"
-		args = append(args, f.Before)
+		q += " AND substr(ts, 1, 19) < ?"
+		args = append(args, dayStartUTC(f.Before, 1))
 	}
 	if f.Newest {
 		q += " ORDER BY ts DESC LIMIT ?"

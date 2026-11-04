@@ -794,6 +794,11 @@ type SnapshotCache struct {
 	mu       sync.Mutex
 	snapshot *Snapshot
 	gather   func(map[string]string, map[int64]bool) (*Snapshot, error)
+	// While a refresh runs, changes made to the cached snapshot (a deleted
+	// event, a linked listing) are kept here and made again on the fresh one,
+	// which was read before them.
+	replay []func(*Snapshot)
+	busy   bool
 }
 
 func NewSnapshotCache(b *botkit.Bot) *SnapshotCache {
@@ -831,12 +836,22 @@ func (c *SnapshotCache) Get(fresh bool) (*Snapshot, error) {
 		return current, nil
 	}
 	ids, sent := c.discordLinks()
+	c.mu.Lock()
+	c.busy, c.replay = true, nil
+	c.mu.Unlock()
 	snap, err := c.gather(ids, sent)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	replay := c.replay
+	c.busy, c.replay = false, nil
 	if err != nil {
 		return nil, err
 	}
 	KeepLastGood(snap, current)
-	c.Set(snap)
+	for _, change := range replay {
+		change(snap)
+	}
+	c.snapshot = snap
 	return snap, nil
 }
 
@@ -901,5 +916,8 @@ func (c *SnapshotCache) Change(change func(*Snapshot)) *Snapshot {
 	s := c.snapshot.Clone()
 	change(s)
 	c.snapshot = s
+	if c.busy {
+		c.replay = append(c.replay, change)
+	}
 	return s
 }

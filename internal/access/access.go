@@ -5,6 +5,10 @@
 package access
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -22,17 +26,35 @@ type Blocked struct {
 	At     time.Time `json:"at"`
 }
 
-var mu sync.Mutex
+var (
+	mu sync.Mutex
+	// Every officer check asks Has, so the list is kept in memory and only
+	// read again when the file changes
+	cached    []Blocked
+	cachedFor string
+)
 
 func load() []Blocked { return store.Load(File, []Blocked{}) }
+
+// fileVersion identifies the file's current contents (path, size, time).
+func fileVersion() string {
+	path, _ := filepath.Abs(File)
+	info, err := os.Stat(path)
+	if err != nil {
+		return path + "|none"
+	}
+	return fmt.Sprintf("%s|%d|%d", path, info.Size(), info.ModTime().UnixNano())
+}
 
 // List is everyone blocked, by name.
 func List() []Blocked {
 	mu.Lock()
 	defer mu.Unlock()
-	all := load()
-	sort.Slice(all, func(i, j int) bool { return all[i].Name < all[j].Name })
-	return all
+	if version := fileVersion(); cachedFor != version {
+		cached, cachedFor = load(), version
+		sort.Slice(cached, func(i, j int) bool { return cached[i].Name < cached[j].Name })
+	}
+	return slices.Clone(cached)
 }
 
 // Has reports whether the user is blocked.
@@ -52,6 +74,7 @@ func Has(userID string) bool {
 func Block(b Blocked) error {
 	mu.Lock()
 	defer mu.Unlock()
+	cachedFor = ""
 	all := load()
 	for i, x := range all {
 		if x.UserID == b.UserID {
@@ -66,6 +89,7 @@ func Block(b Blocked) error {
 func Unblock(userID string) (bool, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	cachedFor = ""
 	all := load()
 	for i, x := range all {
 		if x.UserID == userID {

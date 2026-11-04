@@ -3,6 +3,8 @@ package botkit
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"log"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,7 +90,14 @@ func (r *viewRegistry) sweep() {
 		r.mu.Unlock()
 		for _, v := range expired {
 			if v.OnTimeout != nil {
-				go v.OnTimeout()
+				go func() {
+					defer func() {
+						if p := recover(); p != nil {
+							log.Printf("A menu's timeout panicked: %v\n%s", p, debug.Stack())
+						}
+					}()
+					v.OnTimeout()
+				}()
 			}
 		}
 	}

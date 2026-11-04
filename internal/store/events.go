@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strconv"
 	"time"
 )
@@ -245,7 +246,7 @@ func (s EventStore) SetRoom(gid, status, room string, by int64, note string) (*R
 		if previous == nil {
 			previous = &Room{}
 		}
-		since := time.Now().Format(time.DateOnly)
+		since := Today()
 		if previous.Status == status && previous.Room == room {
 			since = previous.Since
 		}
@@ -339,6 +340,16 @@ func (s EventStore) ChangeReview(gid, kind string, change func(current *Review) 
 		r.Reviews[kind], changed = next, true
 	})
 	return changed, err
+}
+
+// Today is today's date in the chapter's time zone (the server runs on UTC,
+// so time.Now's date is tomorrow's from 8 PM Eastern), YYYY-MM-DD.
+var Today = func() string {
+	loc, err := time.LoadLocation(os.Getenv("REMINDER_TZ"))
+	if err != nil || os.Getenv("REMINDER_TZ") == "" {
+		loc, _ = time.LoadLocation("America/New_York")
+	}
+	return time.Now().In(loc).Format(time.DateOnly)
 }
 
 // SetReview stores (or with nil, removes) one kind of review.

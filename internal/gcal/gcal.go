@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,7 +94,11 @@ func List(calendarID string, timeMin, timeMax time.Time) ([]*calendar.Event, str
 		if token != "" {
 			call = call.PageToken(token)
 		}
-		result, err := Retry(func() (*calendar.Events, error) { return call.Do() })
+		result, err := Retry(func() (*calendar.Events, error) {
+			ctx, cancel := callContext()
+			defer cancel()
+			return call.Context(ctx).Do()
+		})
 		if err != nil {
 			return nil, "", "", err
 		}
@@ -123,19 +128,61 @@ func Get(calendarID, eventID string) (*calendar.Event, error) {
 	if err != nil {
 		return nil, err
 	}
-	e, err := Retry(func() (*calendar.Event, error) { return s.Events.Get(calendarID, eventID).Do() })
+	e, err := Retry(func() (*calendar.Event, error) {
+		ctx, cancel := callContext()
+		defer cancel()
+		return s.Events.Get(calendarID, eventID).Context(ctx).Do()
+	})
 	if code := Status(err); code == 404 || code == 410 {
 		return nil, nil
 	}
 	return e, err
 }
 
+// IDFor is a calendar event ID made from a prefix and an ID (letters a-v and
+// digits, as Google requires), the same every time.
+func IDFor(prefix, id string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(prefix + id) {
+		if (r >= 'a' && r <= 'v') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// Insert adds an event. With body.Id set it's safe to repeat: if that event
+// already exists (a retry after the first try went through), it's returned
+// instead; if it was deleted, a new one gets a fresh ID.
 func Insert(calendarID string, body *calendar.Event) (*calendar.Event, error) {
 	s, err := Service()
 	if err != nil {
 		return nil, err
 	}
-	return Retry(func() (*calendar.Event, error) { return s.Events.Insert(calendarID, body).Do() })
+	insert := func() (*calendar.Event, error) {
+		ctx, cancel := callContext()
+		defer cancel()
+		return s.Events.Insert(calendarID, body).Context(ctx).Do()
+	}
+	e, err := Retry(insert)
+	if Status(err) != 409 || body.Id == "" {
+		return e, err
+	}
+	existing, getErr := Get(calendarID, body.Id)
+	if getErr == nil && existing != nil && existing.Status != "cancelled" {
+		return existing, nil
+	}
+	fresh := *body
+	fresh.Id = ""
+	body = &fresh
+	return Retry(insert)
+}
+
+// CallTimeout is how long one Calendar API call may take.
+const CallTimeout = 60 * time.Second
+
+func callContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), CallTimeout)
 }
 
 // Patch changes the given fields. Use ForceSendFields/NullFields on body for
@@ -145,7 +192,11 @@ func Patch(calendarID, eventID string, body *calendar.Event) (*calendar.Event, e
 	if err != nil {
 		return nil, err
 	}
-	return Retry(func() (*calendar.Event, error) { return s.Events.Patch(calendarID, eventID, body).Do() })
+	return Retry(func() (*calendar.Event, error) {
+		ctx, cancel := callContext()
+		defer cancel()
+		return s.Events.Patch(calendarID, eventID, body).Context(ctx).Do()
+	})
 }
 
 // Delete removes an event; deleted events stay in Google Calendar's trash for
@@ -155,7 +206,11 @@ func Delete(calendarID, eventID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = Retry(func() (struct{}, error) { return struct{}{}, s.Events.Delete(calendarID, eventID).Do() })
+	_, err = Retry(func() (struct{}, error) {
+		ctx, cancel := callContext()
+		defer cancel()
+		return struct{}{}, s.Events.Delete(calendarID, eventID).Context(ctx).Do()
+	})
 	if code := Status(err); code == 404 || code == 410 {
 		return nil
 	}

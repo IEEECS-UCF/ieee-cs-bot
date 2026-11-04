@@ -567,3 +567,31 @@ func TestAVoiceEventGivenARoomBecomesAnEventAtAPlace(t *testing.T) {
 		t.Errorf("%v", body)
 	}
 }
+
+// Every mapped calendar event gone at once looks like a changed calendar ID,
+// not officers cancelling: the Discord events stay. One or two still go.
+func TestManyCalendarEventsGoneAtOnceAreLeftInDiscord(t *testing.T) {
+	f := setup(t)
+	for i, k := range "BCDEF" {
+		f.item(string(k), "Event "+string(k), 3+i)
+	}
+	c := newCog(f, true)
+	runOnce(t, c, f)
+	if len(f.events) != 5 {
+		t.Fatalf("%d Discord events", len(f.events))
+	}
+	f.items, f.order = map[string]*calendar.Event{}, nil
+	f.calls = nil
+	runOnce(t, c, f)
+	if n := len(f.done("discord.delete")); n != 0 {
+		t.Fatalf("deleted %d Discord events", n)
+	}
+	f.item("B", "Event B", 3)
+	f.item("C", "Event C", 4)
+	f.item("D", "Event D", 5)
+	f.calls = nil
+	runOnce(t, c, f) // two gone: those go
+	if n := len(f.done("discord.delete")); n != 2 {
+		t.Errorf("deleted %d, want 2", n)
+	}
+}

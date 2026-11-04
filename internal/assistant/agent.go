@@ -401,7 +401,7 @@ func (a *Ask) search(query string, f Filter, limit int) (string, error) {
 		if author == "" {
 			author = "-"
 		}
-		parts = append(parts, fmt.Sprintf("[%s] %s · %s · %s\n%s\n%s", h.Source, h.Place, author, botkit.Cut(h.TS, 10),
+		parts = append(parts, fmt.Sprintf("[%s] %s · %s · %s\n%s\n%s", h.Source, h.Place, author, LocalDay(h.TS),
 			h.URL, botkit.Cut(h.Text, 1200)))
 	}
 	return strings.Join(parts, "\n\n"), nil

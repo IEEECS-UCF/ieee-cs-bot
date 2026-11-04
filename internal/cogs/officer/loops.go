@@ -238,6 +238,17 @@ type digestState struct {
 
 // ---------- background ----------
 
+// FreshEnough: the digest and the day's nudges use the shared snapshot if
+// it was read this recently, instead of reading every source again (the
+// background refresh had often just done it).
+const FreshEnough = 2 * time.Minute
+
+// olderThan is whether the shared snapshot is missing or older than age.
+func (c *Cog) olderThan(age time.Duration) bool {
+	current := c.cache.Current()
+	return current == nil || time.Since(current.FetchedAt) > age
+}
+
 // warm keeps the shared snapshot fresh so commands answer quickly.
 func (c *Cog) warm() {
 	if _, err := c.get(true); err != nil {
@@ -263,7 +274,7 @@ func (c *Cog) postDigestIfDue(force bool) error {
 		log.Print("Error: Could not find officer digest channel.")
 		return nil
 	}
-	snap, err := c.get(true)
+	snap, err := c.get(c.olderThan(FreshEnough))
 	if err != nil {
 		return err
 	}
@@ -292,8 +303,14 @@ func (c *Cog) postDigestIfDue(force bool) error {
 		if _, err := c.bot.S.ChannelMessageSendComplex(channel.ID, m); err != nil {
 			return err
 		}
+		if i == 0 {
+			// Posted: if a later part fails, don't post the whole digest again
+			if err := store.Save(store.DigestStateFile, digestState{Day: pytime.DayString(now)}); err != nil {
+				return err
+			}
+		}
 	}
-	return store.Save(store.DigestStateFile, digestState{Day: pytime.DayString(now)})
+	return nil
 }
 
 func (c *Cog) postReportIfDue(forceMonth string) error {
@@ -333,10 +350,12 @@ func (c *Cog) postReportIfDue(forceMonth string) error {
 		if _, err := c.bot.S.ChannelMessageSendComplex(channel.ID, m); err != nil {
 			return err
 		}
-	}
-	if forceMonth == "" {
-		if err := off.UpdateMetrics(func(s *off.MetricsState) { s.Posted = key }); err != nil {
-			return err
+		if i == 0 && forceMonth == "" {
+			// Posted: if a later part fails (say the CSV, without Attach Files),
+			// don't post the whole report again
+			if err := off.UpdateMetrics(func(s *off.MetricsState) { s.Posted = key }); err != nil {
+				return err
+			}
 		}
 	}
 	log.Printf("Posted the monthly report for %s", key)
@@ -441,7 +460,7 @@ func (c *Cog) sendNudgesIfDue(force bool) error {
 	}
 	today := pytime.DayString(now)
 	pingDay := force || (now.Hour() >= NudgeHour && (state.Day == nil || *state.Day != today))
-	snap, err := c.get(pingDay)
+	snap, err := c.get(pingDay && c.olderThan(FreshEnough))
 	if err != nil {
 		return err
 	}
@@ -544,7 +563,9 @@ func (c *Cog) showStatus(thread *discordgo.Channel, gid, text string, state *nud
 	}
 	err := c.bot.ChannelMsg(thread.ID, msgID).Edit(botkit.Edit{Content: &content, Components: &buttons, Mentions: botkit.NoMentions()})
 	if err != nil {
-		if !botkit.IsHTTP(err) {
+		// Gone or not ours (4xx): post a new one. Discord down (5xx) or no
+		// answer: try again next run, rather than leave the old one stale
+		if !botkit.IsHTTP(err) || botkit.HTTPStatus(err) >= 500 {
 			return err
 		}
 		m, err := c.bot.S.ChannelMessageSendComplex(thread.ID, &discordgo.MessageSend{Content: content, Components: buttons,

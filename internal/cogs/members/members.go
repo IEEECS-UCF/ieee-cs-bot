@@ -201,13 +201,17 @@ func (c *Cog) onReview(ix interaction, action string, userID int64) {
 	}
 	user := ix.User()
 	note := ""
+	// Decide before giving the role: the role update comes back as a member
+	// update, which would otherwise record it as a role added by hand
+	before := *record
+	record = members.Decide(userID, "verified", botkit.ID(user.ID), "")
 	if member := c.member(ix.GuildID(), userID); member == nil {
 		note = " They're no longer in the server, so no role was given."
 	} else if err := c.addRole(ix.GuildID(), userID, DuesPayingRoleID, "IEEE membership verified by "+user.String()); err != nil {
+		members.Change(userID, func(*members.Record) *members.Record { return &before })
 		ix.Ephemeral(fmt.Sprintf("Couldn't give the role (%s). Nothing was changed.", httpText(err)))
 		return
 	}
-	record = members.Decide(userID, "verified", botkit.ID(user.ID), "")
 	ix.Update(botkit.Edit{Embeds: &[]*discordgo.MessageEmbed{reviewEmbed(userID, record)},
 		Components: botkit.Clear[discordgo.MessageComponent]()})
 	if note != "" {
@@ -364,15 +368,15 @@ func Setup(b *botkit.Bot) {
 	b.Route(`member:(?P<action>approve|reject):(?P<uid>\d+)`, func(ctx *botkit.Ctx, m map[string]string) {
 		c.onReview(live{ctx}, m["action"], botkit.ID(m["uid"]))
 	})
-	b.S.AddHandler(func(s *discordgo.Session, u *discordgo.GuildMemberUpdate) {
+	b.S.AddHandler(botkit.Safe(b, "Membership", func(s *discordgo.Session, u *discordgo.GuildMemberUpdate) {
 		// discord.py only reports updates of cached members, with the cached copy as "before"
 		if u.BeforeUpdate != nil && u.Member != nil && u.Member.User != nil {
 			c.onMemberUpdate(u.BeforeUpdate, u.Member)
 		}
-	})
+	}))
 	if b.S.Identify.Intents&discordgo.IntentsGuildMembers != 0 {
-		b.S.AddHandler(func(s *discordgo.Session, ch *discordgo.GuildMembersChunk) {
+		b.S.AddHandler(botkit.Safe(b, "Membership", func(s *discordgo.Session, ch *discordgo.GuildMembersChunk) {
 			c.onChunk(ch.GuildID, ch.Members, ch.ChunkCount)
-		})
+		}))
 	}
 }

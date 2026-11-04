@@ -2,6 +2,7 @@ package botkit
 
 import (
 	"fmt"
+	"github.com/bwmarrin/discordgo"
 	"log"
 	"runtime/debug"
 	"time"
@@ -44,6 +45,13 @@ func (b *Bot) runLoop(name string, f func()) {
 		}
 	}()
 	f()
+}
+
+// Safe wraps a discordgo event handler with a loop's panic handling:
+// discordgo runs handlers on their own goroutines and doesn't recover, so a
+// panic in one would take the whole bot down. Use it with S.AddHandler.
+func Safe[T any](b *Bot, name string, f func(*discordgo.Session, T)) func(*discordgo.Session, T) {
+	return func(s *discordgo.Session, e T) { b.runLoop(name, func() { f(s, e) }) }
 }
 
 // Go runs f on its own goroutine with the same panic handling as a loop

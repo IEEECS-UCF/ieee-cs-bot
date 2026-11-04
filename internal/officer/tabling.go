@@ -270,6 +270,7 @@ type Session struct {
 // Sessions is the sheet rows as sessions.
 func Sessions(rows []TablingRow) []Session {
 	var found []Session
+	keys := map[string]bool{}
 	for _, r := range rows {
 		day, ok := ParseDay(r["Date"])
 		if !ok {
@@ -282,9 +283,16 @@ func Sessions(rows []TablingRow) []Session {
 				names = append(names, n)
 			}
 		}
+		location := strings.TrimSpace(r["Location"])
+		// Day and time; a second session in the same slot (somewhere else)
+		// adds its place, so it gets its own reminder and volunteer task
+		key := pytime.DayString(day) + "|" + t
+		if keys[key] {
+			key += "|" + location
+		}
+		keys[key] = true
 		found = append(found, Session{Date: day, Time: t, Event: strings.TrimSpace(r["Event Name"]),
-			Location: strings.TrimSpace(r["Location"]), Notes: strings.TrimSpace(r["Notes"]), Names: names,
-			Key: pytime.DayString(day) + "|" + t})
+			Location: location, Notes: strings.TrimSpace(r["Notes"]), Names: names, Key: key})
 	}
 	return found
 }

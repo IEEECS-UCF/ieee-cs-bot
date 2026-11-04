@@ -11,6 +11,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -1146,6 +1147,13 @@ func parallel[S, R any](specs []S, n int, f func(S) R) []R {
 		sem <- struct{}{}
 		go func() {
 			defer func() { <-sem; wg.Done() }()
+			defer func() {
+				// One source that panics (a page it can't parse) comes back
+				// empty, like one that failed, instead of crashing the bot
+				if r := recover(); r != nil {
+					log.Printf("Job source %v panicked: %v\n%s", spec, r, debug.Stack())
+				}
+			}()
 			out[i] = f(spec)
 		}()
 	}

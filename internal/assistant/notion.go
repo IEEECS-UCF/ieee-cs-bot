@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
@@ -68,7 +69,7 @@ func notionRequest(method, url string, body io.Reader) (*http.Request, error) {
 }
 
 func notionCall(method, path string, body any) (*jobj, error) {
-	for range 4 {
+	for attempt := range 4 {
 		var reader io.Reader
 		if body != nil {
 			raw, err := json.Marshal(body)
@@ -100,6 +101,10 @@ func notionCall(method, path string, body any) (*jobj, error) {
 		}
 		if err != nil {
 			return nil, err
+		}
+		if resp.StatusCode >= 500 && attempt < 3 { // Notion has a hiccup now and then
+			notionSleep(time.Duration(1<<attempt) * time.Second)
+			continue
 		}
 		decoded, err := decodeJSON(raw)
 		if err != nil {
@@ -387,7 +392,10 @@ func notionChangedPages(seen map[string]string) ([]Page, map[string]bool, error)
 		}
 		body, err := notionBlockLines(id, 0)
 		if err != nil {
-			return nil, nil, err
+			// Skip this one page (it's tried again next refresh) rather than
+			// throw away every other page read this time
+			log.Printf("Knowledge: couldn't read Notion page %s: %v", titleOf(page), err)
+			continue
 		}
 		parts = append(parts, body...)
 		changed = append(changed, Page{id, titleOf(page), asStr(page.get("url")), edited,

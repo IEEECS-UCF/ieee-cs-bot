@@ -459,6 +459,12 @@ func (d *deleteConfirm) delete(ctx *botkit.Ctx) {
 	}
 	d.view.Stop()
 	k, e := d.card, d.event
+	// Answer Discord first: Google can take longer than the 3 seconds Discord
+	// waits, and then the press looks failed though the delete went through
+	ctx.DeferUpdate()
+	update := func(ctx *botkit.Ctx, text string) {
+		ctx.Original().Edit(botkit.Edit{Content: &text, Components: cleared()})
+	}
 	if err := deleteEvent(k.gid); err != nil {
 		update(ctx, fmt.Sprintf("Couldn't delete it from Google Calendar (%v). Nothing was deleted.", err))
 		return
@@ -516,6 +522,7 @@ func (k *card) roomModal(status, current string) *botkit.Modal {
 }
 
 func (k *card) submitRoom(ctx *botkit.Ctx, status string) {
+	ctx.Defer(true) // updating the calendar can take longer than Discord waits
 	room := strings.Join(strings.Fields(ctx.Field("room")), " ")
 	k.cog.store.SetRoom(k.gid, status, room, ctx.UserID(), ctx.Field("note"))
 	lines := []string{fmt.Sprintf("Room %s: **%s**.", status, room)}

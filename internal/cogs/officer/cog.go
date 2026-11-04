@@ -127,8 +127,9 @@ type Cog struct {
 	now   func() time.Time
 	alert func(where string, err error, detail string)
 
-	postMu  sync.Mutex // one forum post lookup or creation at a time (the nudge loop and reviews both make them)
-	nudgeMu sync.Mutex // one nudge run at a time
+	postMu    sync.Mutex // one forum post lookup or creation at a time (the nudge loop and reviews both make them)
+	nudgeMu   sync.Mutex // one nudge run at a time
+	tablingMu sync.Mutex // one "post open tabling shifts" at a time, so a double click can't post twice
 }
 
 var _ cogapi.Officer = (*Cog)(nil)
@@ -461,6 +462,8 @@ func daysBetween(a, b time.Time) int { return int(math.Round(off.Day(a).Sub(off.
 // TablingTaskDays that isn't staffed or posted yet. It returns the posts, or
 // why it can't.
 func (c *Cog) postTablingTasks(userID int64) ([]string, string, error) {
+	c.tablingMu.Lock()
+	defer c.tablingMu.Unlock()
 	if c.volunteerChannel() == nil || off.TablingSheetID() == "" {
 		return nil, "Needs VOLUNTEER_CHANNEL_ID and TABLING_SHEET_ID set.", nil
 	}

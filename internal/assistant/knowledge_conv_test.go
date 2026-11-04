@@ -145,3 +145,48 @@ func TestBuildConversationsFromAnOlderCache(t *testing.T) {
 		t.Errorf("new messages join the built conversations: %q", got)
 	}
 }
+
+func TestPurgedMessagesAndDeletedChannelsLeaveTheCache(t *testing.T) {
+	k := openTest(t)
+	k.PutMessages([]Row{msg(101, 0, "Eren", "room is 205"), msg(102, 1, "Dawn", "ok"), msg(103, 2, "Sam", "and pizza")})
+	other := msg(201, 0, "Eren", "elsewhere")
+	other.URL = "https://discord.com/channels/1/8/201"
+	k.PutMessages([]Row{other})
+	if err := k.RemoveMessages([]string{"discord:102", "discord:103"}); err != nil {
+		t.Fatal(err)
+	}
+	if hits, _ := k.Search("pizza", "", 5); len(hits) != 0 {
+		t.Errorf("purged message still found: %v", hits)
+	}
+	if got := convs(t, k); len(got) != 0 {
+		t.Errorf("a one-message conversation is left: %q", got) // only 101 is left in it
+	}
+	n, err := k.RemoveChannel("9")
+	if err != nil || n != 1 {
+		t.Fatalf("%d removed, %v", n, err)
+	}
+	if hits, _ := k.Search("room", "", 5); len(hits) != 0 {
+		t.Errorf("deleted channel still found: %v", hits)
+	}
+	if hits, _ := k.Search("elsewhere", "", 5); len(hits) != 1 {
+		t.Errorf("another channel's message went too: %v", hits)
+	}
+}
+
+// An 8:30 PM Eastern message is stored as the next day in UTC; filters and
+// result dates go by the Eastern day.
+func TestDaysAreEastern(t *testing.T) {
+	k := openTest(t)
+	evening := Row{"discord:301", "discord", "#general", "Eren", "2026-11-04T01:30:00.000000+00:00",
+		"https://discord.com/channels/1/9/301", "meeting moved to Thursday"}
+	k.PutMessages([]Row{evening})
+	if hits, _ := k.SearchWith("meeting", Filter{After: "2026-11-04"}, 5); len(hits) != 0 {
+		t.Error("counted on Nov 4")
+	}
+	if hits, _ := k.SearchWith("meeting", Filter{Before: "2026-11-03", After: "2026-11-03"}, 5); len(hits) != 1 {
+		t.Error("not on Nov 3")
+	}
+	if got := LocalDay(evening.TS); got != "2026-11-03" {
+		t.Errorf("shown as %s", got)
+	}
+}

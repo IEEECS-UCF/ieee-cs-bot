@@ -129,7 +129,7 @@ func (b *Bot) markReady() {
 	b.readyOnce.Do(func() {
 		close(b.ready)
 		for _, f := range b.onReady {
-			go f()
+			b.Go("Startup", f)
 		}
 	})
 }
@@ -387,4 +387,12 @@ func IsNotFound(err error) bool {
 func IsHTTP(err error) bool {
 	_, ok := err.(*discordgo.RESTError)
 	return ok
+}
+
+// HTTPStatus is a Discord API error's HTTP status, or 0.
+func HTTPStatus(err error) int {
+	if re, ok := err.(*discordgo.RESTError); ok && re.Response != nil {
+		return re.Response.StatusCode
+	}
+	return 0
 }

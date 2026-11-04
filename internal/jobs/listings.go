@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -126,7 +127,12 @@ func RunWorker(req Request) (*Result, error) {
 	defer cancel()
 	result, err := Work(ctx, req)
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return nil, fmt.Errorf("job worker took longer than %ds", int(WorkerTimeout.Seconds()))
+		if result == nil {
+			return nil, fmt.Errorf("job worker took longer than %ds", int(WorkerTimeout.Seconds()))
+		}
+		// What finished in time is kept; sources cut off have no listings
+		// (keep their cache), and are tried again on the next run
+		log.Printf("Job worker took longer than %ds; keeping what finished", int(WorkerTimeout.Seconds()))
 	}
 	return result, err
 }

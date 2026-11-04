@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -92,13 +93,88 @@ func (k *Knowledge) EditMessage(r Row) error {
 }
 
 // RemoveMessage deletes a message and takes it out of its conversation.
-func (k *Knowledge) RemoveMessage(key string) error {
+func (k *Knowledge) RemoveMessage(key string) error { return k.RemoveMessages([]string{key}) }
+
+// RemoveMessages deletes messages (a bulk delete) and takes them out of
+// their conversations.
+func (k *Knowledge) RemoveMessages(keys []string) error {
 	return k.tx(func(tx *sql.Tx) error {
-		if err := remove(tx, key); err != nil {
+		convs := map[string]bool{}
+		for _, key := range keys {
+			var conv string
+			if tx.QueryRow("SELECT conv FROM convmsg WHERE msg = ?", key).Scan(&conv) == nil {
+				convs[conv] = true
+			}
+			if err := remove(tx, key); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("DELETE FROM convmsg WHERE msg = ?", key); err != nil {
+				return err
+			}
+		}
+		for conv := range convs {
+			if err := rebuildConversation(tx, conv); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// RemoveChannel deletes every message and conversation from a channel or
+// thread that was deleted. It returns how many messages went.
+func (k *Knowledge) RemoveChannel(channelID string) (int, error) {
+	n := 0
+	err := k.tx(func(tx *sql.Tx) error {
+		rows, err := tx.Query("SELECT msg FROM convmsg WHERE conv >= ? AND conv < ?", "conv:"+channelID+":", "conv:"+channelID+";")
+		if err != nil {
 			return err
 		}
-		return rebuildConversationOf(tx, key)
+		var keys []string
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err != nil {
+				rows.Close()
+				return err
+			}
+			keys = append(keys, key)
+		}
+		rows.Close()
+		// Messages a conversation never took in (the first of a channel's cache)
+		more, err := tx.Query("SELECT key FROM docs WHERE source = 'discord' AND key LIKE 'discord:%' AND url LIKE ?",
+			"%/channels/%/"+channelID+"/%")
+		if err != nil {
+			return err
+		}
+		for more.Next() {
+			var key string
+			if err := more.Scan(&key); err != nil {
+				more.Close()
+				return err
+			}
+			if !slices.Contains(keys, key) {
+				keys = append(keys, key)
+			}
+		}
+		more.Close()
+		for _, key := range keys {
+			if err := remove(tx, key); err != nil {
+				return err
+			}
+		}
+		n = len(keys)
+		if err := removePrefix(tx, "conv:"+channelID+":"); err != nil {
+			return err
+		}
+		for _, q := range []string{"DELETE FROM convmsg WHERE conv >= ? AND conv < ?"} {
+			if _, err := tx.Exec(q, "conv:"+channelID+":", "conv:"+channelID+";"); err != nil {
+				return err
+			}
+		}
+		_, err = tx.Exec("DELETE FROM meta WHERE k IN (?, ?)", "conv:"+channelID, "last:"+channelID)
+		return err
 	})
+	return n, err
 }
 
 func rebuildConversationOf(tx *sql.Tx, msgKey string) error {

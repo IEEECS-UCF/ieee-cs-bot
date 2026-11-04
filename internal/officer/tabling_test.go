@@ -191,3 +191,16 @@ func TestSheetReadsNormally(t *testing.T) {
 		t.Errorf("%v %v", got, err)
 	}
 }
+
+// Two sessions in the same slot at different places each get their own key,
+// so each gets a reminder and a volunteer task. The first keeps the old key.
+func TestSameSlotSessionsGetTheirOwnKeys(t *testing.T) {
+	rows := []TablingRow{
+		{"Date": "2026-11-06", "Time": "3:00 PM - 5:00 PM", "Event Name": "Fair", "Location": "SU Room 316"},
+		{"Date": "2026-11-06", "Time": "3:00 PM - 5:00 PM", "Event Name": "Expo", "Location": "Pegasus Ballroom"},
+	}
+	s := Sessions(rows)
+	if s[0].Key != "2026-11-06|3:00 PM - 5:00 PM" || s[1].Key != "2026-11-06|3:00 PM - 5:00 PM|Pegasus Ballroom" {
+		t.Errorf("%q %q", s[0].Key, s[1].Key)
+	}
+}

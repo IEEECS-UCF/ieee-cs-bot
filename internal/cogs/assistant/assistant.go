@@ -94,6 +94,11 @@ type Cog struct {
 	// cog sets it.
 	Events assistant.Events
 	convos conversations
+	// newest is the newest message seen live in each channel: Discord's cached
+	// last-message IDs don't move while the bot runs, so catch-up uses this
+	// to re-read channels that had messages (in case one wasn't saved).
+	newestMu sync.Mutex
+	newest   map[string]string
 }
 
 func Setup(b *botkit.Bot) {
@@ -102,7 +107,8 @@ func Setup(b *botkit.Bot) {
 		log.Printf("Failed to load extension assistant: %v", err)
 		return
 	}
-	c := &Cog{bot: b, guildID: botkit.GuildID(), knowledge: k, convos: conversations{byMessage: map[string]*conversation{}}}
+	c := &Cog{bot: b, guildID: botkit.GuildID(), knowledge: k, convos: conversations{byMessage: map[string]*conversation{}},
+		newest: map[string]string{}}
 	b.AddCog(cogapi.AssistantName, c)
 	b.Loop("Knowledge cache (Discord)", CatchUpHours*time.Hour, func() {
 		// Caches filled before conversations existed get them once, from
@@ -128,9 +134,16 @@ func Setup(b *botkit.Bot) {
 		}
 	})
 	b.Loop("Reminders", ReminderCheck, c.sendDueReminders)
-	b.S.AddHandler(c.onMessage)
-	b.S.AddHandler(c.onMessageEdit)
-	b.S.AddHandler(c.onMessageDelete)
+	b.S.AddHandler(botkit.Safe(b, "Knowledge cache", c.onMessage))
+	b.S.AddHandler(botkit.Safe(b, "Knowledge cache", c.onMessageEdit))
+	b.S.AddHandler(botkit.Safe(b, "Knowledge cache", c.onMessageDelete))
+	b.S.AddHandler(botkit.Safe(b, "Knowledge cache", c.onMessageDeleteBulk))
+	b.S.AddHandler(botkit.Safe(b, "Knowledge cache", func(_ *discordgo.Session, e *discordgo.ChannelDelete) {
+		c.removeChannel(e.GuildID, e.ID, e.Name)
+	}))
+	b.S.AddHandler(botkit.Safe(b, "Knowledge cache", func(_ *discordgo.Session, e *discordgo.ThreadDelete) {
+		c.removeChannel(e.GuildID, e.ID, e.Name)
+	}))
 }
 
 // ---------- Discord ----------
@@ -232,7 +245,13 @@ func (c *Cog) indexGuild() error {
 
 func (c *Cog) indexChannel(channel *discordgo.Channel) int {
 	after := c.knowledge.GetMeta("last:"+channel.ID, "")
-	if UpToDate(after, channel.LastMessageID) {
+	latest := channel.LastMessageID
+	c.newestMu.Lock()
+	if seen := c.newest[channel.ID]; idLess(latest, seen) {
+		latest = seen
+	}
+	c.newestMu.Unlock()
+	if UpToDate(after, latest) {
 		return 0
 	}
 	if after == "" {
@@ -300,8 +319,15 @@ func (c *Cog) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 	c.maybeFollowUp(m)
+	c.newestMu.Lock()
+	if idLess(c.newest[m.ChannelID], m.ID) {
+		c.newest[m.ChannelID] = m.ID
+	}
+	c.newestMu.Unlock()
 	if row, ok := Entry(c.message(m.Message, c.bot.Channel(m.ChannelID))); ok {
-		c.knowledge.PutMessages([]assistant.Row{row})
+		if err := c.knowledge.PutMessages([]assistant.Row{row}); err != nil {
+			log.Printf("Knowledge cache: couldn't save a message (the next catch-up reads it again): %v", err)
+		}
 	}
 }
 
@@ -310,13 +336,43 @@ func (c *Cog) onMessageEdit(s *discordgo.Session, m *discordgo.MessageUpdate) {
 		return
 	}
 	if row, ok := Entry(c.message(m.Message, c.bot.Channel(m.ChannelID))); ok {
-		c.knowledge.EditMessage(row)
+		if err := c.knowledge.EditMessage(row); err != nil {
+			log.Printf("Knowledge cache: couldn't save an edit: %v", err)
+		}
 	}
 }
 
 func (c *Cog) onMessageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 	if m.GuildID == c.guildID {
-		c.knowledge.RemoveMessage("discord:" + m.ID)
+		if err := c.knowledge.RemoveMessage("discord:" + m.ID); err != nil {
+			log.Printf("Knowledge cache: couldn't remove a deleted message: %v", err)
+		}
+	}
+}
+
+func (c *Cog) onMessageDeleteBulk(s *discordgo.Session, m *discordgo.MessageDeleteBulk) {
+	if m.GuildID != c.guildID {
+		return
+	}
+	keys := make([]string, len(m.Messages))
+	for i, id := range m.Messages {
+		keys[i] = "discord:" + id
+	}
+	if err := c.knowledge.RemoveMessages(keys); err != nil {
+		log.Printf("Knowledge cache: couldn't remove %d purged messages: %v", len(keys), err)
+	}
+}
+
+// removeChannel drops a deleted channel's or thread's messages from the cache.
+func (c *Cog) removeChannel(guildID, channelID, name string) {
+	if guildID != c.guildID {
+		return
+	}
+	n, err := c.knowledge.RemoveChannel(channelID)
+	if err != nil {
+		log.Printf("Knowledge cache: couldn't remove deleted #%s: %v", name, err)
+	} else if n > 0 {
+		log.Printf("Knowledge cache: removed %d messages from deleted #%s", n, name)
 	}
 }
 
