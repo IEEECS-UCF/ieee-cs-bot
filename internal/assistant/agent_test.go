@@ -266,3 +266,40 @@ func TestAFailedTurnCantBeContinued(t *testing.T) {
 		t.Error("a failed turn left a conversation to continue")
 	}
 }
+
+func TestWebToolsOnlyReachTheChaptersSites(t *testing.T) {
+	raw, _ := json.Marshal(Tools)
+	for _, want := range []string{`"type":"web_search_20260209"`, `"type":"web_fetch_20260209"`,
+		`"allowed_domains":["computer.org","ieee.org"]`} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("tools missing %s", want)
+		}
+	}
+}
+
+func TestAPausedTurnIsSentBackToFinish(t *testing.T) {
+	testutil.Setup(t)
+	a, _ := makeAsk(t)
+	usage := `"usage": {"input_tokens": 1, "output_tokens": 1}`
+	replies := []*anthropic.BetaMessage{
+		message(t, `{"id": "m1", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "stop_reason": "pause_turn",
+			"content": [{"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "IEEE CS student chapter awards"}}], `+usage+`}`),
+		message(t, `{"id": "m2", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "stop_reason": "end_turn",
+			"content": [{"type": "text", "text": "Nominations close in March."}], `+usage+`}`),
+	}
+	var sent []anthropic.BetaMessageNewParams
+	old := NewMessage
+	NewMessage = func(_ context.Context, p anthropic.BetaMessageNewParams) (*anthropic.BetaMessage, error) {
+		sent = append(sent, p)
+		r := replies[0]
+		replies = replies[1:]
+		return r, nil
+	}
+	defer func() { NewMessage = old }()
+	if answer := a.Run(context.Background(), "when are chapter award nominations due"); answer != "Nominations close in March." {
+		t.Fatalf("%q", answer)
+	}
+	if len(sent) != 2 || len(sent[1].Messages) != 2 || sent[1].Messages[1].Role != "assistant" {
+		t.Fatalf("the paused turn should go back as the last message: %d sends", len(sent))
+	}
+}

@@ -46,6 +46,7 @@ Look things up first:
 Questions:
 - Search the knowledge cache before answering anything factual. It holds the server's Discord messages, the chapter's Drive documents and its Notion pages. Search again with other words if the first results miss, and narrow by channel or dates (or newest_first) when the question is about a place or a time. Use the Drive and Notion tools to read a file or page in full.
 - Answer from what you found and link the messages or docs you used. If you can't find it, say so; don't guess.
+- web_search and web_fetch reach only computer.org and ieee.org. Use them for questions about IEEE or the Computer Society itself (membership, student chapter rules and awards, conferences, competitions, programs), not for questions about this chapter, which live in the knowledge cache. Link the pages you used.
 
 Changes:
 - Find what you're changing first (list_events, search_drive, search_notion, find_discord_files), then call the change tool. Ask instead of guessing when the target or the change is unclear, e.g. when two folders could match.
@@ -118,11 +119,26 @@ var Tools = func() []anthropic.BetaToolUnionParam {
 		tool("send_announcement_for_review", "Queue sending an #announcements post to other officers for review. It posts only after an officer other than the asker approves it. Leave out event_id for a general announcement.",
 			schema{"text": str(), "event_id": str()}, "text"),
 	}
+	tools = append(tools, WebTools()...)
 	tools = append(tools, FileTools()...)
 	tools = append(tools, MessageTools()...)
 	tools[len(tools)-1].OfTool.CacheControl = anthropic.NewBetaCacheControlEphemeralParam()
 	return tools
 }()
+
+// WebDomains are the only sites web_search and web_fetch can reach
+// (subdomains included).
+var WebDomains = []string{"computer.org", "ieee.org"}
+
+// WebTools are Anthropic's web search and web fetch, run on Anthropic's side.
+func WebTools() []anthropic.BetaToolUnionParam {
+	return []anthropic.BetaToolUnionParam{
+		{OfWebSearchTool20260209: &anthropic.BetaWebSearchTool20260209Param{
+			MaxUses: anthropic.Int(5), AllowedDomains: WebDomains}},
+		{OfWebFetchTool20260209: &anthropic.BetaWebFetchTool20260209Param{
+			MaxUses: anthropic.Int(5), MaxContentTokens: anthropic.Int(20000), AllowedDomains: WebDomains}},
+	}
+}
 
 // Change is a queued change; Apply returns a line about what happened.
 type Change struct {
@@ -196,6 +212,10 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 		a.count(response.Usage)
 		if response.StopReason == "refusal" {
 			return "Claude declined to answer that one."
+		}
+		if response.StopReason == "pause_turn" { // a long web search: send it back to carry on
+			messages = append(messages, response.ToParam())
+			continue
 		}
 		if response.StopReason != "tool_use" {
 			var text strings.Builder
