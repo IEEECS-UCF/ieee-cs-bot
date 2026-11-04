@@ -105,6 +105,14 @@ func Setup(b *botkit.Bot) {
 	c := &Cog{bot: b, guildID: botkit.GuildID(), knowledge: k, convos: conversations{byMessage: map[string]*conversation{}}}
 	b.AddCog(cogapi.AssistantName, c)
 	b.Loop("Knowledge cache (Discord)", CatchUpHours*time.Hour, func() {
+		// Caches filled before conversations existed get them once, from
+		// what's cached, before the catch-up adds to them
+		start := time.Now()
+		if n, err := k.BuildConversations(); err != nil {
+			log.Printf("Knowledge cache: couldn't build conversations: %v", err)
+		} else if n > 0 {
+			log.Printf("Knowledge cache: built %d conversations in %v", n, time.Since(start).Round(time.Second))
+		}
 		if err := c.indexGuild(); err != nil {
 			b.Alert("Knowledge cache (Discord)", err, "")
 		}
@@ -279,7 +287,7 @@ func idLess(a, b string) bool {
 }
 
 func (c *Cog) flush(rows []assistant.Row, channel *discordgo.Channel, newest string) int {
-	if err := c.knowledge.PutMany(rows); err != nil {
+	if err := c.knowledge.PutMessages(rows); err != nil {
 		log.Printf("Knowledge cache: couldn't save messages from #%s: %v", channel.Name, err)
 		return 0
 	}
@@ -293,7 +301,7 @@ func (c *Cog) onMessage(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	c.maybeFollowUp(m)
 	if row, ok := Entry(c.message(m.Message, c.bot.Channel(m.ChannelID))); ok {
-		c.knowledge.Put(row)
+		c.knowledge.PutMessages([]assistant.Row{row})
 	}
 }
 
@@ -302,13 +310,13 @@ func (c *Cog) onMessageEdit(s *discordgo.Session, m *discordgo.MessageUpdate) {
 		return
 	}
 	if row, ok := Entry(c.message(m.Message, c.bot.Channel(m.ChannelID))); ok {
-		c.knowledge.Put(row)
+		c.knowledge.EditMessage(row)
 	}
 }
 
 func (c *Cog) onMessageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 	if m.GuildID == c.guildID {
-		c.knowledge.Remove("discord:" + m.ID)
+		c.knowledge.RemoveMessage("discord:" + m.ID)
 	}
 }
 

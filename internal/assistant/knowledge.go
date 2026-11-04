@@ -44,6 +44,7 @@ type Row struct {
 
 // Hit is a search result.
 type Hit struct {
+	Key    string `json:"-"`
 	Source string `json:"source"`
 	Place  string `json:"place"`
 	Author string `json:"author"`
@@ -106,6 +107,9 @@ func OpenKnowledge(path string) (*Knowledge, error) {
 		// the whole index (a first fill of 60k messages took about an hour).
 		// keys maps each key to its row; caches from before it are filled in once.
 		if _, err := tx.Exec("CREATE TABLE IF NOT EXISTS keys (k TEXT PRIMARY KEY, rid INTEGER NOT NULL) WITHOUT ROWID"); err != nil {
+			return err
+		}
+		if err := createConvTables(tx); err != nil {
 			return err
 		}
 		var done string
@@ -255,39 +259,98 @@ func (k *Knowledge) SetMeta(key, value string) error {
 
 // ---------- reading ----------
 
+// Filter narrows a search. Place matches part of a channel or document
+// name; After and Before are YYYY-MM-DD days, both included.
+type Filter struct {
+	Source, Place, After, Before string
+	Newest                       bool // newest first instead of best match first
+}
+
 // Search returns the best matches first; source "" (or anything not in
 // Sources) searches everything.
 func (k *Knowledge) Search(query, source string, limit int) ([]Hit, error) {
+	return k.SearchWith(query, Filter{Source: source}, limit)
+}
+
+// Relevance is bm25 (place and text count most), scaled down by age (a
+// year-old entry needs twice the match of today's to rank level with it) and
+// for very short text (a one-liner like "a room is a room" otherwise beats
+// the conversation that answers the question).
+const relevance = `bm25(docs, 0, 0, 2.0, 1.0, 0, 0, 1.0)
+	* min(1.0, (length(text) + 40) / 160.0)
+	/ (1.0 + coalesce(julianday('now') - julianday(substr(ts, 1, 19)), 730) / 365.0)`
+
+// SearchWith is Search with filters. A Discord message whose conversation is
+// also in the results is left out, so the same text doesn't show twice.
+func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error) {
 	match := FTSQuery(query)
 	if match == "" {
 		return nil, nil
 	}
-	q := "SELECT source, place, author, ts, url, text FROM docs WHERE docs MATCH ?"
+	q := "SELECT key, source, place, author, ts, url, text FROM docs WHERE docs MATCH ?"
 	args := []any{match}
 	for _, s := range Sources {
-		if source == s {
+		if f.Source == s {
 			q += " AND source = ?"
-			args = append(args, source)
+			args = append(args, s)
 		}
 	}
-	q += " ORDER BY bm25(docs, 0, 0, 2.0, 1.0, 0, 0, 1.0) LIMIT ?"
-	args = append(args, limit)
+	if place := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(f.Place), "#")); place != "" {
+		q += " AND place LIKE ?"
+		args = append(args, "%"+place+"%")
+	}
+	if f.After != "" {
+		q += " AND substr(ts, 1, 10) >= ?"
+		args = append(args, f.After)
+	}
+	if f.Before != "" {
+		q += " AND substr(ts, 1, 10) <= ?"
+		args = append(args, f.Before)
+	}
+	if f.Newest {
+		q += " ORDER BY ts DESC LIMIT ?"
+	} else {
+		q += " ORDER BY " + relevance + " LIMIT ?"
+	}
+	args = append(args, limit*2)
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	rows, err := k.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var hits []Hit
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.Source, &h.Place, &h.Author, &h.TS, &h.URL, &h.Text); err != nil {
+		if err := rows.Scan(&h.Key, &h.Source, &h.Place, &h.Author, &h.TS, &h.URL, &h.Text); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		hits = append(hits, h)
 	}
-	return hits, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	convs := map[string]bool{}
+	for _, h := range hits {
+		if strings.HasPrefix(h.Key, "conv:") {
+			convs[h.Key] = true
+		}
+	}
+	var out []Hit
+	for _, h := range hits {
+		if strings.HasPrefix(h.Key, "discord:") && len(convs) > 0 {
+			var conv string
+			if k.db.QueryRow("SELECT conv FROM convmsg WHERE msg = ?", h.Key).Scan(&conv) == nil && convs[conv] {
+				continue
+			}
+		}
+		if len(out) < limit {
+			out = append(out, h)
+		}
+	}
+	return out, nil
 }
 
 // Counts is the number of entries per source.
@@ -312,17 +375,35 @@ func (k *Knowledge) Counts() map[string]int {
 
 var word = regexp.MustCompile(`[\p{L}\p{N}\p{Mn}_]+`)
 
+// stopwords are left out of searches: they match nearly everything.
+var stopwords = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`a an and are as at be but by can could did do does for from had has have how
+		i if in into is it its me my of on or our so that the their them then there these they this to us was we
+		were what when where which who whom why will with would you your about any some just get got`) {
+		stopwords[w] = true
+	}
+}
+
 // FTSQuery is plain words OR'd together, so punctuation can't break FTS5's
 // query syntax; bm25 ranks entries matching more (and rarer) words first.
 func FTSQuery(text string) string {
 	seen := map[string]bool{}
-	var quoted []string
+	var quoted, filler []string
 	for _, w := range word.FindAllString(strings.ToLower(text), -1) {
 		if len([]rune(w)) <= 1 || seen[w] {
 			continue
 		}
 		seen[w] = true
-		quoted = append(quoted, `"`+w+`"`)
+		if stopwords[w] {
+			filler = append(filler, `"`+w+`"`)
+		} else {
+			quoted = append(quoted, `"`+w+`"`)
+		}
+	}
+	if len(quoted) == 0 { // only filler words: search for those
+		quoted = filler
 	}
 	return strings.Join(quoted, " OR ")
 }

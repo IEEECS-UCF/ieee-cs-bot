@@ -44,7 +44,7 @@ Look things up first:
 - Before you answer, or write a message for someone, look up whatever it might depend on: search the knowledge cache, read the conversation around a message, check the events. Don't answer chapter questions from assumption.
 
 Questions:
-- Search the knowledge cache before answering anything factual. It holds the server's Discord messages, the chapter's Drive documents and its Notion pages. Search again with other words if the first results miss. Use the Drive and Notion tools to read a file or page in full.
+- Search the knowledge cache before answering anything factual. It holds the server's Discord messages, the chapter's Drive documents and its Notion pages. Search again with other words if the first results miss, and narrow by channel or dates (or newest_first) when the question is about a place or a time. Use the Drive and Notion tools to read a file or page in full.
 - Answer from what you found and link the messages or docs you used. If you can't find it, say so; don't guess.
 
 Changes:
@@ -87,9 +87,13 @@ func enum(values ...string) schema { return schema{"type": "string", "enum": val
 // Tools never change, and neither does the system prompt: both are cached.
 var Tools = func() []anthropic.BetaToolUnionParam {
 	tools := []anthropic.BetaToolUnionParam{
-		tool("search", "Full-text search of the knowledge cache: Discord messages, Drive documents and Notion pages. Returns the best matches with links.",
+		tool("search", "Full-text search of the knowledge cache: Discord messages and conversations (back-and-forth in a channel, as \"Name: message\" lines), Drive documents and Notion pages. Returns the best matches with links; recent ones rank higher.",
 			schema{"query": str("Words to search for"), "source": enum("any", "discord", "drive", "notion"),
-				"limit": schema{"type": "integer", "minimum": 1, "maximum": 20}}, "query"),
+				"channel":      str("Only this channel, thread or document (part of its name, e.g. general)"),
+				"after":        str("Only from this day on, YYYY-MM-DD"),
+				"before":       str("Only up to this day, YYYY-MM-DD"),
+				"newest_first": schema{"type": "boolean", "description": "Newest matches first instead of best first"},
+				"limit":        schema{"type": "integer", "minimum": 1, "maximum": 20}}, "query"),
 		tool("read_discord_context", "The messages around one Discord message, to see the whole conversation. Pass a message link from search results.",
 			schema{"url": str()}, "url"),
 		tool("list_events", "Events on the chapter calendar from a week ago onward, with id, date, time, room, owner and how many steps are open.",
@@ -179,7 +183,7 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 	for range MaxTurns {
 		response, err := NewMessage(ctx, anthropic.BetaMessageNewParams{
 			Model: Model, MaxTokens: 16000,
-			OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortLow},
+			OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortMedium},
 			Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
 			Fallbacks:    anthropic.BetaFallbacksParamOfDefault(),
 			System:       a.system(),
@@ -254,11 +258,9 @@ func (a *Ask) Tool(name string, input json.RawMessage) (string, error) {
 		if v, ok := args["limit"].(float64); ok {
 			limit = int(v)
 		}
-		source := s("source")
-		if source == "" {
-			source = "any"
-		}
-		return a.search(s("query"), source, min(limit, 20))
+		newest, _ := args["newest_first"].(bool)
+		return a.search(s("query"), Filter{Source: s("source"), Place: s("channel"), After: s("after"),
+			Before: s("before"), Newest: newest}, min(limit, 20))
 	case "read_discord_context":
 		return a.readDiscordContext(s("url"))
 	case "find_member":
@@ -310,8 +312,8 @@ func (a *Ask) Tool(name string, input json.RawMessage) (string, error) {
 
 // ---------- reading ----------
 
-func (a *Ask) search(query, source string, limit int) (string, error) {
-	hits, err := a.Knowledge.Search(query, source, limit)
+func (a *Ask) search(query string, f Filter, limit int) (string, error) {
+	hits, err := a.Knowledge.SearchWith(query, f, limit)
 	if err != nil {
 		return "", err
 	}
@@ -325,7 +327,7 @@ func (a *Ask) search(query, source string, limit int) (string, error) {
 			author = "-"
 		}
 		parts = append(parts, fmt.Sprintf("[%s] %s · %s · %s\n%s\n%s", h.Source, h.Place, author, botkit.Cut(h.TS, 10),
-			h.URL, botkit.Cut(h.Text, 800)))
+			h.URL, botkit.Cut(h.Text, 1200)))
 	}
 	return strings.Join(parts, "\n\n"), nil
 }

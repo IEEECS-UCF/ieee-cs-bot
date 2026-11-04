@@ -80,7 +80,10 @@ func TestADamagedCacheStartsFresh(t *testing.T) {
 }
 
 func TestQueryAndChunks(t *testing.T) {
-	if got := FTSQuery("Where's the GPU kernels repo?"); got != `"where" OR "the" OR "gpu" OR "kernels" OR "repo"` {
+	if got := FTSQuery("who is it"); got != `"who" OR "is" OR "it"` {
+		t.Errorf("only filler words: %s", got)
+	}
+	if got := FTSQuery("Where's the GPU kernels repo?"); got != `"gpu" OR "kernels" OR "repo"` {
 		t.Error(got)
 	}
 	parts := Chunks(strings.Repeat("x", 3500), Chunk, Overlap)

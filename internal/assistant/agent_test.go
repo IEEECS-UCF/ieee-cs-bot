@@ -192,7 +192,7 @@ func TestTheLoopRunsToolsThenAnswers(t *testing.T) {
 	if !strings.Contains(answer, "once you confirm") || len(a.Changes) != 1 {
 		t.Fatalf("%q %d", answer, len(a.Changes))
 	}
-	if sent[0].Model != "claude-sonnet-5-5" || sent[0].OutputConfig.Effort != "low" {
+	if sent[0].Model != "claude-sonnet-5-5" || sent[0].OutputConfig.Effort != "medium" {
 		t.Errorf("%v %v", sent[0].Model, sent[0].OutputConfig.Effort)
 	}
 	last := sent[1].Messages[len(sent[1].Messages)-1]
