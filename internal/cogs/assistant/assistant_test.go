@@ -62,3 +62,22 @@ func TestOnlyOfficerChannelsGetAnswers(t *testing.T) {
 		t.Error("officer role can't see its channel")
 	}
 }
+
+func TestChannelsWithNothingNewAreSkipped(t *testing.T) {
+	for _, c := range []struct {
+		lastRead, lastMessage string
+		skip                  bool
+	}{
+		{"", "100", false},    // never read
+		{"100", "", false},    // Discord didn't say
+		{"100", "100", true},  // nothing since
+		{"100", "99", true},   // the newest was deleted
+		{"100", "101", false}, // something new
+		{"99", "1000", false}, // longer IDs are newer
+		{"1000", "999", true},
+	} {
+		if got := UpToDate(c.lastRead, c.lastMessage); got != c.skip {
+			t.Errorf("UpToDate(%q, %q) = %v", c.lastRead, c.lastMessage, got)
+		}
+	}
+}

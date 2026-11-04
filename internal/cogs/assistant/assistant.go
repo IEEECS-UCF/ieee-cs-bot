@@ -224,6 +224,9 @@ func (c *Cog) indexGuild() error {
 
 func (c *Cog) indexChannel(channel *discordgo.Channel) int {
 	after := c.knowledge.GetMeta("last:"+channel.ID, "")
+	if UpToDate(after, channel.LastMessageID) {
+		return 0
+	}
 	if after == "" {
 		after = "0"
 	}
@@ -258,6 +261,14 @@ func (c *Cog) indexChannel(channel *discordgo.Channel) int {
 		added += c.flush(rows, channel, newest)
 	}
 	return added
+}
+
+// UpToDate reports whether a channel has nothing newer than the last message
+// read from it, so reading it can be skipped. A channel's last message ID
+// comes from Discord at startup and with each thread list; messages posted
+// while the bot runs are saved as they arrive, so they don't need it fresh.
+func UpToDate(lastRead, lastMessageID string) bool {
+	return lastRead != "" && lastMessageID != "" && !idLess(lastRead, lastMessageID)
 }
 
 func idLess(a, b string) bool {

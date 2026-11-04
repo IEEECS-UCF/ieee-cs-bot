@@ -3,6 +3,7 @@ package assistant
 import (
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,5 +94,61 @@ func TestQueryAndChunks(t *testing.T) {
 	}
 	if Chunks("", Chunk, Overlap) != nil || !reflect.DeepEqual(Chunks("short", Chunk, Overlap), []string{"short"}) {
 		t.Error("short chunks")
+	}
+}
+
+func TestEntriesAreReplacedAndRemovedByKey(t *testing.T) {
+	testutil.Setup(t)
+	k, err := OpenKnowledge("cache/k.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	k.PutMany([]Row{{"discord:1", "discord", "#a", "sam", "2026-11-01", "u1", "pizza social"},
+		{"discord:2", "discord", "#a", "sam", "2026-11-01", "u2", "pizza workshop"}})
+	k.Put(Row{"discord:1", "discord", "#a", "sam", "2026-11-01", "u1", "taco social"}) // edited
+	if hits, _ := k.Search("pizza", "", 8); !slices.Equal(urls(hits), []string{"u2"}) {
+		t.Errorf("an edit replaces the old text: %v", urls(hits))
+	}
+	k.Put(Row{"discord:2", "discord", "#a", "sam", "2026-11-01", "u2", "  "}) // emptied
+	k.Remove("discord:1")
+	if n := k.Counts()["discord"]; n != 0 {
+		t.Errorf("%d left after removing both", n)
+	}
+
+	k.PutDocument("drive", "d1", "Plan", "doc1", "2026-11-01", strings.Repeat("budget ", 400))
+	k.PutDocument("drive", "d10", "Other", "doc10", "2026-11-01", "budget too")
+	chunks := k.Counts()["drive"]
+	k.PutDocument("drive", "d1", "Plan", "doc1", "2026-11-01", "short budget")
+	if n := k.Counts()["drive"]; chunks < 3 || n != 2 {
+		t.Errorf("re-reading a document replaces all its chunks and no other document's: %d then %d", chunks, n)
+	}
+	k.RemoveDocument("drive", "d1")
+	if hits, _ := k.Search("budget", "", 8); !slices.Equal(urls(hits), []string{"doc10"}) {
+		t.Errorf("after removing d1: %v", urls(hits))
+	}
+}
+
+// A cache from before the keys table gets one on open, so its entries can
+// still be replaced.
+func TestAnOlderCacheGetsItsKeysIndexed(t *testing.T) {
+	testutil.Setup(t)
+	k, err := OpenKnowledge("cache/old.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	k.Put(Row{"discord:1", "discord", "#a", "sam", "2026-11-01", "u1", "pizza social"})
+	k.db.Exec("DROP TABLE keys")
+	k.db.Exec("DELETE FROM meta WHERE k = 'keys_indexed'")
+	k.Close()
+
+	k, err = OpenKnowledge("cache/old.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	k.Put(Row{"discord:1", "discord", "#a", "sam", "2026-11-01", "u1", "taco social"})
+	if hits, _ := k.Search("pizza", "", 8); len(hits) != 0 || k.Counts()["discord"] != 1 {
+		t.Errorf("old entry not replaced: %v, %d entries", urls(hits), k.Counts()["discord"])
 	}
 }

@@ -63,6 +63,13 @@ func open(path string) (*sql.DB, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // one connection, like sqlite3.connect
+	// WAL commits without rewriting the main file each time; it's only a
+	// cache, so NORMAL sync (no fsync per commit) is safe enough
+	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL"} {
+		if _, err := db.Exec(pragma); err != nil {
+			log.Printf("Knowledge cache: %s: %v", pragma, err)
+		}
+	}
 	return db, nil
 }
 
@@ -92,7 +99,23 @@ func OpenKnowledge(path string) (*Knowledge, error) {
 			"tokenize='porter unicode61')"); err != nil {
 			return err
 		}
-		_, err := tx.Exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)")
+		if _, err := tx.Exec("CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)"); err != nil {
+			return err
+		}
+		// FTS5 can't index the key column, so finding an entry by key scanned
+		// the whole index (a first fill of 60k messages took about an hour).
+		// keys maps each key to its row; caches from before it are filled in once.
+		if _, err := tx.Exec("CREATE TABLE IF NOT EXISTS keys (k TEXT PRIMARY KEY, rid INTEGER NOT NULL) WITHOUT ROWID"); err != nil {
+			return err
+		}
+		var done string
+		if tx.QueryRow("SELECT v FROM meta WHERE k = 'keys_indexed'").Scan(&done) == nil {
+			return nil
+		}
+		if _, err := tx.Exec("INSERT OR REPLACE INTO keys SELECT key, rowid FROM docs"); err != nil {
+			return err
+		}
+		_, err := tx.Exec("INSERT OR REPLACE INTO meta VALUES ('keys_indexed', '1')")
 		return err
 	})
 	if err != nil {
@@ -125,6 +148,54 @@ func (k *Knowledge) tx(f func(*sql.Tx) error) error {
 
 const insert = "INSERT INTO docs VALUES (?, ?, ?, ?, ?, ?, ?)"
 
+// put writes one entry, replacing any with the same key.
+func put(tx *sql.Tx, key, source, place, author, ts, url, text string) error {
+	if err := remove(tx, key); err != nil {
+		return err
+	}
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	res, err := tx.Exec(insert, key, source, place, author, ts, url, text)
+	if err != nil {
+		return err
+	}
+	rid, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec("INSERT OR REPLACE INTO keys VALUES (?, ?)", key, rid)
+	return err
+}
+
+// remove deletes the entry with this key, if there is one.
+func remove(tx *sql.Tx, key string) error {
+	var rid int64
+	switch err := tx.QueryRow("SELECT rid FROM keys WHERE k = ?", key).Scan(&rid); err {
+	case nil:
+	case sql.ErrNoRows:
+		return nil
+	default:
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM docs WHERE rowid = ?", rid); err != nil {
+		return err
+	}
+	_, err := tx.Exec("DELETE FROM keys WHERE k = ?", key)
+	return err
+}
+
+// removePrefix deletes every entry whose key starts with prefix, which ends
+// in ":" (a document's chunks are source:docID:n).
+func removePrefix(tx *sql.Tx, prefix string) error {
+	upper := prefix[:len(prefix)-1] + ";" // the next character after ':'
+	if _, err := tx.Exec("DELETE FROM docs WHERE rowid IN (SELECT rid FROM keys WHERE k >= ? AND k < ?)", prefix, upper); err != nil {
+		return err
+	}
+	_, err := tx.Exec("DELETE FROM keys WHERE k >= ? AND k < ?", prefix, upper)
+	return err
+}
+
 // ---------- writing ----------
 
 func (k *Knowledge) Put(r Row) error { return k.PutMany([]Row{r}) }
@@ -133,15 +204,7 @@ func (k *Knowledge) Put(r Row) error { return k.PutMany([]Row{r}) }
 func (k *Knowledge) PutMany(rows []Row) error {
 	return k.tx(func(tx *sql.Tx) error {
 		for _, r := range rows {
-			if _, err := tx.Exec("DELETE FROM docs WHERE key = ?", r.Key); err != nil {
-				return err
-			}
-		}
-		for _, r := range rows {
-			if strings.TrimSpace(r.Text) == "" {
-				continue
-			}
-			if _, err := tx.Exec(insert, r.Key, r.Source, r.Place, r.Author, r.TS, r.URL, r.Text); err != nil {
+			if err := put(tx, r.Key, r.Source, r.Place, r.Author, r.TS, r.URL, r.Text); err != nil {
 				return err
 			}
 		}
@@ -150,20 +213,17 @@ func (k *Knowledge) PutMany(rows []Row) error {
 }
 
 func (k *Knowledge) Remove(key string) error {
-	return k.tx(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DELETE FROM docs WHERE key = ?", key)
-		return err
-	})
+	return k.tx(func(tx *sql.Tx) error { return remove(tx, key) })
 }
 
 // PutDocument replaces a document's chunks.
 func (k *Knowledge) PutDocument(source, docID, title, url, ts, text string) error {
 	return k.tx(func(tx *sql.Tx) error {
-		if _, err := tx.Exec("DELETE FROM docs WHERE key LIKE ?", source+":"+docID+":%"); err != nil {
+		if err := removePrefix(tx, source+":"+docID+":"); err != nil {
 			return err
 		}
 		for n, piece := range Chunks(text, Chunk, Overlap) {
-			if _, err := tx.Exec(insert, fmt.Sprintf("%s:%s:%d", source, docID, n), source, title, "", ts, url, piece); err != nil {
+			if err := put(tx, fmt.Sprintf("%s:%s:%d", source, docID, n), source, title, "", ts, url, piece); err != nil {
 				return err
 			}
 		}
@@ -172,10 +232,7 @@ func (k *Knowledge) PutDocument(source, docID, title, url, ts, text string) erro
 }
 
 func (k *Knowledge) RemoveDocument(source, docID string) error {
-	return k.tx(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DELETE FROM docs WHERE key LIKE ?", source+":"+docID+":%")
-		return err
-	})
+	return k.tx(func(tx *sql.Tx) error { return removePrefix(tx, source+":"+docID+":") })
 }
 
 // GetMeta returns a meta value, or def.
