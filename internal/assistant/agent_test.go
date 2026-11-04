@@ -302,4 +302,7 @@ func TestAPausedTurnIsSentBackToFinish(t *testing.T) {
 	if len(sent) != 2 || len(sent[1].Messages) != 2 || sent[1].Messages[1].Role != "assistant" {
 		t.Fatalf("the paused turn should go back as the last message: %d sends", len(sent))
 	}
+	if len(a.Used) != 1 || !strings.HasPrefix(a.Used[0], `web_search "IEEE`) {
+		t.Errorf("used %q", a.Used)
+	}
 }

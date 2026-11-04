@@ -46,7 +46,9 @@ Look things up first:
 Questions:
 - Search the knowledge cache before answering anything factual. It holds the server's Discord messages, the chapter's Drive documents and its Notion pages. Search again with other words if the first results miss, and narrow by channel or dates (or newest_first) when the question is about a place or a time. Use the Drive and Notion tools to read a file or page in full.
 - Answer from what you found and link the messages or docs you used. If you can't find it, say so; don't guess.
-- web_search and web_fetch reach only computer.org, ieee.org and ucf.edu. Use them for questions about IEEE or the Computer Society itself (membership, student chapter rules and awards, conferences, competitions, programs) or about UCF (buildings and rooms, the academic calendar, student organization rules, campus services), not for questions about this chapter, which live in the knowledge cache. Link the pages you used.
+- web_search and web_fetch reach only computer.org, ieee.org and ucf.edu. Many questions need both the knowledge cache and the web: what the chapter has said and done is in the cache, while rules, amounts, deadlines and dates set by IEEE, the Computer Society or UCF are on their sites. Look up each part where it lives before you answer.
+- UCF Student Government (SGA) funding, RSO rules and travel money are on studentgovernment.ucf.edu and other ucf.edu pages (the CRT committee FAQ, the Title VIII finance code, recent funding bills). Find the actual amounts, caps and deadlines; web_fetch reads PDFs. Link the pages you used.
+- Don't tell officers to go check something you could look up yourself. If a search misses, try other words or the other source first.
 
 Changes:
 - Find what you're changing first (list_events, search_drive, search_notion, find_discord_files), then call the change tool. Ask instead of guessing when the target or the change is unclear, e.g. when two folders could match.
@@ -160,6 +162,7 @@ type Ask struct {
 	NameOf    func(userID int64) string // a member's display name (tests); nil reads the guild
 	Changes   []Change
 	Usage     Usage
+	Used      []string // the tools this run called, with their search or URL, for the log
 	// History is the whole conversation so far, in order, never edited (so the
 	// cache and Claude's earlier thinking stay valid). Run adds this turn to it;
 	// it's nil after a turn that can't be continued (an error or a refusal).
@@ -210,6 +213,7 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 			return aidraft.APIErrorText(err)
 		}
 		a.count(response.Usage)
+		a.noteTools(response.Content)
 		if response.StopReason == "refusal" {
 			return "Claude declined to answer that one."
 		}
@@ -245,6 +249,22 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 		messages = append(messages, anthropic.NewBetaUserMessage(results...))
 	}
 	return "That took too many steps; try asking more specifically."
+}
+
+// noteTools adds the tool calls in a response to a.Used.
+func (a *Ask) noteTools(content []anthropic.BetaContentBlockUnion) {
+	for _, b := range content {
+		if b.Type != "tool_use" && b.Type != "server_tool_use" {
+			continue
+		}
+		var args struct{ Query, URL string }
+		json.Unmarshal(b.Input, &args)
+		if what := args.Query + args.URL; what != "" {
+			a.Used = append(a.Used, fmt.Sprintf("%s %q", b.Name, botkit.Cut(what, 80)))
+		} else {
+			a.Used = append(a.Used, b.Name)
+		}
+	}
 }
 
 func (a *Ask) count(u anthropic.BetaUsage) {

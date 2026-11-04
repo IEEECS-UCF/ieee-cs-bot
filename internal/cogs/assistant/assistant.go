@@ -510,8 +510,12 @@ func (c *Cog) Ask(ctx *botkit.Ctx, question string) {
 
 func logUsage(what string, user *discordgo.User, run *assistant.Ask) {
 	u := run.Usage
-	log.Printf("%s by %s (%s): %d new + %d cached + %d cache-write input tokens, %d output, %d changes queued",
-		what, user.Username, user.ID, u.Input, u.Cached, u.CacheWrite, u.Output, len(run.Changes))
+	used := "none"
+	if len(run.Used) > 0 {
+		used = strings.Join(run.Used, ", ")
+	}
+	log.Printf("%s by %s (%s): %d new + %d cached + %d cache-write input tokens, %d output, %d changes queued; tools: %s",
+		what, user.Username, user.ID, u.Input, u.Cached, u.CacheWrite, u.Output, len(run.Changes), used)
 }
 
 // answerPieces splits an answer into Discord-sized messages, plus a "waiting
