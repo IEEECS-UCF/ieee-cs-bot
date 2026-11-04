@@ -312,9 +312,14 @@ func (c *Cog) postReportIfDue(forceMonth string) error {
 	}
 	var year, month int
 	fmt.Sscanf(key, "%d-%d", &year, &month)
-	embeds, data, name, err := c.monthlyReport(year, month)
+	embeds, data, name, missing, err := c.monthlyReport(year, month)
 	if err != nil {
 		return err
+	}
+	if len(missing) > 0 && forceMonth == "" && now.Day() < 3 {
+		// Wait a little for the source to come back; after that, post with the gap noted
+		log.Printf("Monthly report for %s: waiting, couldn't read %s", key, strings.Join(missing, ", "))
+		return nil
 	}
 	batches := off.SplitEmbeds(embeds)
 	for i, batch := range batches {
@@ -439,6 +444,12 @@ func (c *Cog) sendNudgesIfDue(force bool) error {
 	snap, err := c.get(pingDay)
 	if err != nil {
 		return err
+	}
+	if len(snap.Missing) > 0 {
+		// Every event would look unlisted on that source: no status updates or
+		// pings until it can be read (the next run tries again)
+		log.Printf("Nudges: waiting, couldn't read %s", strings.Join(snap.Missing, ", "))
+		return nil
 	}
 	board := map[string]boardEntry{}
 	var order []string

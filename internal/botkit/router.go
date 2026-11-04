@@ -99,6 +99,9 @@ func (b *Bot) runAutocomplete(c *Ctx) {
 	}
 }
 
+// RunComponent handles a button press or modal submit as if Discord sent it (tests).
+func (b *Bot) RunComponent(c *Ctx) { b.runComponent(c) }
+
 func (b *Bot) runComponent(c *Ctx) {
 	id := c.CustomID()
 	defer b.recoverInteraction(c, "Button "+id)

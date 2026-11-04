@@ -322,6 +322,25 @@ func (s EventStore) SetReminder(gid, send, ping string) (*Record, error) {
 	})
 }
 
+// ChangeReview replaces one kind of review with change(current), under the
+// store's lock, so a change made from an older copy can't undo a newer one.
+// change gets nil when there's none, and returns nil to leave it as it is.
+// It reports whether anything was written.
+func (s EventStore) ChangeReview(gid, kind string, change func(current *Review) *Review) (bool, error) {
+	changed := false
+	_, err := s.Update(gid, func(r *Record) {
+		next := change(r.Reviews[kind])
+		if next == nil {
+			return
+		}
+		if r.Reviews == nil {
+			r.Reviews = map[string]*Review{}
+		}
+		r.Reviews[kind], changed = next, true
+	})
+	return changed, err
+}
+
 // SetReview stores (or with nil, removes) one kind of review.
 func (s EventStore) SetReview(gid, kind string, review *Review) (*Record, error) {
 	return s.Update(gid, func(r *Record) {

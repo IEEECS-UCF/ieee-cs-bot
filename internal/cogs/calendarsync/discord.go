@@ -113,6 +113,24 @@ func (l live) Create(p Payload, image []byte) (*discordgo.GuildScheduledEvent, e
 
 // Edit sends what discord.py's event.edit sends for these arguments.
 func (l live) Edit(e *discordgo.GuildScheduledEvent, ch changes) (*discordgo.GuildScheduledEvent, error) {
+	body, err := editBody(e, ch)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := discordgo.EndpointGuildScheduledEvent(l.guildID, e.ID)
+	raw, err := l.b.S.RequestWithBucketID("PATCH", endpoint, body, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	var edited discordgo.GuildScheduledEvent
+	if err := json.Unmarshal(raw, &edited); err != nil {
+		return nil, err
+	}
+	return &edited, nil
+}
+
+// editBody is the PATCH body for Edit.
+func editBody(e *discordgo.GuildScheduledEvent, ch changes) (map[string]any, error) {
 	body := map[string]any{}
 	if ch.Name != nil {
 		body["name"] = *ch.Name
@@ -137,23 +155,24 @@ func (l live) Edit(e *discordgo.GuildScheduledEvent, ch changes) (*discordgo.Gui
 		if ch.Location != nil {
 			body["entity_metadata"] = map[string]string{"location": *ch.Location}
 		}
+		if e.EntityType != discordgo.GuildScheduledEventEntityTypeExternal {
+			// A voice or stage event becoming one at a place: say so, or Discord refuses
+			body["entity_type"] = discordgo.GuildScheduledEventEntityTypeExternal
+		}
 		if e.ScheduledEndTime == nil && ch.End == nil {
-			return nil, errors.New("end_time must be set when entity_type is external")
+			// Events at a place need an end; voice events can have none. Give it an hour.
+			start := e.ScheduledStartTime
+			if ch.Start != nil {
+				start = *ch.Start
+			}
+			end := start.Add(time.Hour)
+			ch.End = &end
 		}
 	}
 	if ch.End != nil {
 		body["scheduled_end_time"] = pytime.Isoformat(ch.End.UTC())
 	}
-	endpoint := discordgo.EndpointGuildScheduledEvent(l.guildID, e.ID)
-	raw, err := l.b.S.RequestWithBucketID("PATCH", endpoint, body, endpoint)
-	if err != nil {
-		return nil, err
-	}
-	var edited discordgo.GuildScheduledEvent
-	if err := json.Unmarshal(raw, &edited); err != nil {
-		return nil, err
-	}
-	return &edited, nil
+	return body, nil
 }
 
 func (l live) Delete(e *discordgo.GuildScheduledEvent, reason string) error {

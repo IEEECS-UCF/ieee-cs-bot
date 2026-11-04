@@ -264,3 +264,22 @@ func TestOfficersPostGetsItsOwnStatusMessage(t *testing.T) {
 		t.Errorf("status %v", loadNudges().Status)
 	}
 }
+
+// A source that couldn't be read makes every event look unlisted there: no
+// statuses or pings from that, and the day's nudge waits for the next run.
+func TestNudgesWaitWhileASourceCantBeRead(t *testing.T) {
+	snap := snapshot(event(gid("g1"), days(5)))
+	snap.Missing = []string{"vTools"}
+	tc := nudgeCog(t, snap)
+	if err := tc.sendNudgesIfDue(true); err != nil {
+		t.Fatal(err)
+	}
+	if len(tc.f.find("POST", `/channels/\d+/(messages|threads)`)) != 0 || len(tc.f.find("PATCH", `/channels/77/messages/\d+`)) != 0 {
+		t.Fatal("nudged with vTools unreadable")
+	}
+	snap.Missing = nil
+	tc.sendNudgesIfDue(false)
+	if len(tc.f.find("POST", `/channels/77/messages`)) != 1 {
+		t.Error("no nudge once vTools was back")
+	}
+}

@@ -160,9 +160,13 @@ type Ask struct {
 	ChannelID string                    // where /officer ask was run
 	Events    Events                    // the officer tools' event data; nil answers without it
 	NameOf    func(userID int64) string // a member's display name (tests); nil reads the guild
-	Changes   []Change
-	Usage     Usage
-	Used      []string // the tools this run called, with their search or URL, for the log
+	// CanSee is whether the asker can read a channel or thread. Answers only
+	// use what they can see, so nothing from a private thread or channel ends
+	// up quoted to them (nil: everything, in tests).
+	CanSee  func(channelID string) bool
+	Changes []Change
+	Usage   Usage
+	Used    []string // the tools this run called, with their search or URL, for the log
 	// History is the whole conversation so far, in order, never edited (so the
 	// cache and Claude's earlier thinking stay valid). Run adds this turn to it;
 	// it's nil after a turn that can't be continued (an error or a refusal).
@@ -223,13 +227,32 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 		}
 		if response.StopReason != "tool_use" {
 			var text strings.Builder
+			calls := false
 			for _, b := range response.Content {
-				if b.Type == "text" {
+				switch b.Type {
+				case "text":
 					text.WriteString(b.Text)
+				case "tool_use":
+					calls = true
 				}
 			}
-			a.History = append(messages, response.ToParam())
-			if out := strings.TrimSpace(text.String()); out != "" {
+			out := strings.TrimSpace(text.String())
+			if response.StopReason == "end_turn" || response.StopReason == "stop_sequence" {
+				a.History = append(messages, response.ToParam())
+			} else {
+				// Cut off (max_tokens, or the context window ran out). A tool call
+				// cut off mid-way has no result, and the API refuses a conversation
+				// like that, so it can only be continued if there's none.
+				if !calls && response.StopReason == "max_tokens" {
+					a.History = append(messages, response.ToParam())
+				}
+				note := "(This answer was cut off before it finished.)"
+				if a.History == nil {
+					note = "(This answer was cut off before it finished, so replying to it won't continue the conversation. Ask again, more specifically.)"
+				}
+				out = strings.TrimSpace(out + "\n\n" + note)
+			}
+			if out != "" {
 				return out
 			}
 			return "(no answer)"
@@ -352,10 +375,22 @@ func (a *Ask) Tool(name string, input json.RawMessage) (string, error) {
 
 // ---------- reading ----------
 
+// sees is whether the asker can read channelID.
+func (a *Ask) sees(channelID string) bool { return a.CanSee == nil || a.CanSee(channelID) }
+
 func (a *Ask) search(query string, f Filter, limit int) (string, error) {
-	hits, err := a.Knowledge.SearchWith(query, f, limit)
+	found, err := a.Knowledge.SearchWith(query, f, limit+10) // room for ones they can't see
 	if err != nil {
 		return "", err
+	}
+	var hits []Hit
+	for _, h := range found {
+		if m := messageLink.FindStringSubmatch(h.URL); h.Source == "discord" && a.CanSee != nil && (m == nil || !a.CanSee(m[1])) {
+			continue
+		}
+		if len(hits) < limit {
+			hits = append(hits, h)
+		}
 	}
 	if len(hits) == 0 {
 		return "No matches.", nil
@@ -383,6 +418,9 @@ func (a *Ask) readDiscordContext(url string) (string, error) {
 	found := messageLink.FindStringSubmatch(url)
 	if found == nil {
 		return "That isn't a Discord message link.", nil
+	}
+	if !a.sees(found[1]) {
+		return "The asker can't see that channel, so it can't be used.", nil
 	}
 	messages, err := ReadHistory(a.Bot, found[1], found[2])
 	if err != nil {

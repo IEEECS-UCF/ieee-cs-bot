@@ -306,3 +306,43 @@ func TestAPausedTurnIsSentBackToFinish(t *testing.T) {
 		t.Errorf("used %q", a.Used)
 	}
 }
+
+func TestACutOffAnswerSaysSoAndNeverLeavesAToolCallWithoutAResult(t *testing.T) {
+	testutil.Setup(t)
+	usage := `"usage": {"input_tokens": 1, "output_tokens": 1}`
+	for _, tc := range []struct {
+		content, stop string
+		continues     bool
+	}{
+		{`[{"type": "text", "text": "Here's the first half"}]`, "max_tokens", true},
+		{`[{"type": "text", "text": "Writing the doc"}, {"type": "tool_use", "id": "t1", "name": "create_google_doc", "input": {}}]`, "max_tokens", false},
+		{`[{"type": "text", "text": "Too much"}]`, "model_context_window_exceeded", false},
+	} {
+		a, _ := makeAsk(t)
+		old := NewMessage
+		NewMessage = func(context.Context, anthropic.BetaMessageNewParams) (*anthropic.BetaMessage, error) {
+			return message(t, `{"id": "m1", "type": "message", "role": "assistant", "model": "claude-sonnet-5-5", "stop_reason": "`+
+				tc.stop+`", "content": `+tc.content+`, `+usage+`}`), nil
+		}
+		answer := a.Run(context.Background(), "draft the meeting notes doc")
+		NewMessage = old
+		if !strings.Contains(answer, "cut off") || (a.History != nil) != tc.continues {
+			t.Errorf("%s: %q, history %v", tc.stop, answer, a.History != nil)
+		}
+	}
+}
+
+func TestAnswersOnlyUseChannelsTheAskerCanSee(t *testing.T) {
+	testutil.Setup(t)
+	a, _ := makeAsk(t)
+	a.CanSee = func(channel string) bool { return channel != "666" }
+	a.Knowledge.Put(Row{"discord:5", "discord", "#ops-chat", "Eren", "2026-11-01", "https://discord.com/channels/1/2/5", "Budget is $300"})
+	a.Knowledge.Put(Row{"discord:6", "discord", "#exec › chair stuff", "Eren", "2026-11-01", "https://discord.com/channels/1/666/6", "Budget secret plans"})
+	got, _ := call(t, a, "search", map[string]any{"query": "budget"})
+	if !strings.Contains(got, "/2/5") || strings.Contains(got, "/666/") {
+		t.Error(got)
+	}
+	if got, _ := call(t, a, "read_discord_context", map[string]any{"url": "https://discord.com/channels/1/666/6"}); !strings.Contains(got, "can't see") {
+		t.Error(got)
+	}
+}

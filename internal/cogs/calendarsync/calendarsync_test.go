@@ -527,3 +527,43 @@ func TestSummaryWeekStartsMonday9am(t *testing.T) {
 		}
 	}
 }
+
+// A blank line in a Discord description used to make every sync patch the
+// calendar again: the calendar side drops blank lines, this side didn't.
+func TestABlankLineInADiscordDescriptionSyncsOnce(t *testing.T) {
+	f := setup(t)
+	c := newCog(f, true)
+	start := now.AddDate(0, 0, 3)
+	f.events = []*event{f.newEvent("Social", "Pizza\n\nGames", "ENG2 205", start, start.Add(time.Hour), 12345, "")}
+	runOnce(t, c, f) // imported into the calendar
+	f.events[0].Description = "Pizza\n\nGames, and prizes"
+	f.calls = nil
+	runOnce(t, c, f)
+	if n := len(f.done("gcal.patch")); n != 1 {
+		t.Fatalf("%d patches for the edit", n)
+	}
+	for range 3 {
+		f.calls = nil
+		runOnce(t, c, f)
+		if n := len(f.done("gcal.patch")); n != 0 {
+			t.Fatalf("patched again with nothing changed (%d)", n)
+		}
+	}
+}
+
+// A voice event moved to a room: it becomes an event at a place, and gets an
+// end time if it had none, instead of an error that stopped the whole sync.
+func TestAVoiceEventGivenARoomBecomesAnEventAtAPlace(t *testing.T) {
+	start := now.AddDate(0, 0, 3)
+	room := "ENG2 205"
+	e := &discordgo.GuildScheduledEvent{ID: "9", EntityType: discordgo.GuildScheduledEventEntityTypeVoice,
+		ChannelID: "777", ScheduledStartTime: start}
+	body, err := editBody(e, changes{Location: &room})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["entity_type"] != discordgo.GuildScheduledEventEntityTypeExternal || body["channel_id"] != nil ||
+		body["scheduled_end_time"] != pytime.Isoformat(start.Add(time.Hour).UTC()) {
+		t.Errorf("%v", body)
+	}
+}

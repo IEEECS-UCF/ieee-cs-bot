@@ -134,3 +134,25 @@ func TestRemindersFromTheChapterView(t *testing.T) {
 		t.Errorf("cancel: %q", tc.f.lastSaid(ctx))
 	}
 }
+
+func TestBlockingTakesEffectOnScreensAlreadyOpen(t *testing.T) {
+	tc := newTestCog(t)
+	swap(t, &botkit.Blocked, access.Has)
+	presses := 0
+	button := tc.bot.NewOfficerView().Button("Emergency post", discordgo.DangerButton, func(*botkit.Ctx) { presses++ })
+	pressAs := func() *botkit.Ctx {
+		ctx := press(tc.bot, 1)
+		ctx.I.Member.Roles = []string{officerRole}
+		data := ctx.I.Data.(discordgo.MessageComponentInteractionData)
+		data.CustomID = button.CustomID
+		ctx.I.Data = data
+		tc.bot.RunComponent(ctx)
+		return ctx
+	}
+	pressAs()
+	access.Block(access.Blocked{UserID: "1", Name: "user1"})
+	blocked := pressAs()
+	if presses != 1 || tc.f.lastSaid(blocked) != "Only officers can use this." {
+		t.Fatalf("presses %d, said %q", presses, tc.f.said(blocked))
+	}
+}

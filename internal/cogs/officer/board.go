@@ -25,7 +25,7 @@ type board struct {
 }
 
 func (c *Cog) newBoard(rows []off.BoardRow) *board {
-	b := &board{cog: c, view: c.bot.NewView()}
+	b := &board{cog: c, view: c.bot.NewOfficerView()}
 	var options []discordgo.SelectMenuOption
 	for i, r := range rows {
 		if i == 25 {
@@ -71,7 +71,7 @@ func (c *Cog) submitNewEvent(ctx *botkit.Ctx) {
 		Description: strings.TrimSpace(ctx.Field("description"))}
 	start, end, err := off.ParseForm(v.Date, v.Time, c.now())
 	if err != nil {
-		retry := c.bot.NewView()
+		retry := c.bot.NewOfficerView()
 		ephemeral(ctx, err.Error(), botkit.Rows(retry.Button("Fix it", discordgo.PrimaryButton, func(ctx *botkit.Ctx) {
 			ctx.Modal(c.newEventModal(retry, v))
 		})))
@@ -100,7 +100,7 @@ type newEventPreview struct {
 }
 
 func (c *Cog) newPreview(v newEventValues, start, end time.Time) *newEventPreview {
-	p := &newEventPreview{cog: c, values: v, start: start, end: end, view: c.bot.NewView()}
+	p := &newEventPreview{cog: c, values: v, start: start, end: end, view: c.bot.NewOfficerView()}
 	var items []discordgo.MessageComponent
 	add := func(label string, style discordgo.ButtonStyle, status string) {
 		p.labels = append(p.labels, label)
@@ -114,7 +114,7 @@ func (c *Cog) newPreview(v newEventValues, start, end time.Time) *newEventPrevie
 	}
 	items = append(items, botkit.NewRow,
 		p.view.Button("Edit", discordgo.SecondaryButton, func(ctx *botkit.Ctx) {
-			ctx.Modal(c.newEventModal(c.bot.NewView(), p.values))
+			ctx.Modal(c.newEventModal(c.bot.NewOfficerView(), p.values))
 			p.finish()
 		}),
 		p.view.Button("Cancel", discordgo.SecondaryButton, func(ctx *botkit.Ctx) {

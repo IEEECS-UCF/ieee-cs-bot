@@ -238,18 +238,29 @@ func AnnouncementDraft(e Event, discordLink, roleMention string) string {
 	if body == "" {
 		body = "[One or two sentences on what people will learn or do.]"
 	}
-	return fmt.Sprintf("# Hey %s!\n# ( ´ ▽ ` )ﾉ\n\n"+
-		"## %s\n"+
-		"%s\n\n"+
-		"📅 %s\n"+
-		"🕡 %s\n"+
-		"📍 %s\n"+
-		"%s\n\n"+
-		"Bring a friend! ( ๑>ᴗ<๑ )\n\n"+
-		"## See You There!\nヾ(＾-＾)ノ",
-		opener, e.Name, body, pytime.Strftime(e.Start, "%A, %-m/%-d"), pytime.Strftime(e.Start, "%-I:%M %p"),
-		orTBA(e.Location), discordLink)
+	post := func(body string) string {
+		return fmt.Sprintf("# Hey %s!\n# ( ´ ▽ ` )ﾉ\n\n"+
+			"## %s\n"+
+			"%s\n\n"+
+			"📅 %s\n"+
+			"🕡 %s\n"+
+			"📍 %s\n"+
+			"%s\n\n"+
+			"Bring a friend! ( ๑>ᴗ<๑ )\n\n"+
+			"## See You There!\nヾ(＾-＾)ノ",
+			opener, e.Name, body, pytime.Strftime(e.Start, "%A, %-m/%-d"), pytime.Strftime(e.Start, "%-I:%M %p"),
+			orTBA(e.Location), discordLink)
+	}
+	// A long calendar description is cut, not the date, time and place after it:
+	// Discord posts at most 2000 characters.
+	if room := MaxPost - len([]rune(post(""))); len([]rune(body)) > room {
+		body = strings.TrimSpace(cut(body, max(room-1, 0))) + "…"
+	}
+	return post(body)
 }
+
+// MaxPost is the most characters a Discord message can have.
+const MaxPost = 2000
 
 func InstagramCaption(e Event) string {
 	description := cut(strings.Split(PlainDescription(e), "\n")[0], 180)

@@ -215,11 +215,19 @@ func (c *Cog) Run() error {
 			}
 			if current.Editor == nil && current.Text != text {
 				// The event changed and nobody has rewritten the bot's text: show the new text, approve again
-				changed := *current
-				changed.Text, changed.Status, changed.Approver = text, officer.Pending, nil
-				current = &changed
-				officer.PutReview(gid, "reminder", current)
-				showReview(c.bot, "reminder", current, when, buttons(gid, ""))
+				seen := current
+				officer.ChangeReview(gid, "reminder", func(r *store.Review) *store.Review {
+					if r == nil || r.Editor != nil || r.Text != seen.Text || r.Status != seen.Status {
+						return nil // someone edited or approved it since
+					}
+					changed := *r
+					changed.Text, changed.Status, changed.Approver = text, officer.Pending, nil
+					current = &changed
+					return &changed
+				})
+				if current != seen {
+					showReview(c.bot, "reminder", current, when, buttons(gid, ""))
+				}
 			}
 		}
 
@@ -249,15 +257,27 @@ func (c *Cog) Run() error {
 			}
 			sent[event.ID] = pytime.Isoformat(event.Start.UTC())
 			c.save()
+			link := botkit.JumpURL(c.guildID, message.ChannelID, message.ID)
 			posted := *current
-			posted.Status, posted.Posted = officer.Posted, botkit.JumpURL(c.guildID, message.ChannelID, message.ID)
-			officer.PutReview(gid, "reminder", &posted)
+			officer.ChangeReview(gid, "reminder", func(r *store.Review) *store.Review {
+				if r == nil {
+					return nil
+				}
+				posted = *r
+				posted.Status, posted.Posted = officer.Posted, link
+				return &posted
+			})
 			showReview(c.bot, "reminder", &posted, "", nil)
 			log.Printf("Posted reminder: %s", event.Name)
 		case "late":
-			noted := *current
-			noted.LateNoted = true
-			officer.PutReview(gid, "reminder", &noted)
+			officer.ChangeReview(gid, "reminder", func(r *store.Review) *store.Review {
+				if r == nil || r.Status != officer.Pending {
+					return nil // approved meanwhile
+				}
+				noted := *r
+				noted.LateNoted = true
+				return &noted
+			})
 			if len(current.Message) < 2 {
 				continue
 			}
@@ -291,8 +311,17 @@ func (c *Cog) Run() error {
 // closeReview takes the review off the table (no more buttons), saying why
 // on the message.
 func (c *Cog) closeReview(gid string, current *store.Review, status, why string) {
-	closed := *current
-	closed.Status, closed.Why = status, why
-	officer.PutReview(gid, "reminder", &closed)
-	showReview(c.bot, "reminder", &closed, "", nil)
+	var closed *store.Review
+	officer.ChangeReview(gid, "reminder", func(r *store.Review) *store.Review {
+		if r == nil || (r.Status != officer.Pending && r.Status != officer.Approved) {
+			return nil
+		}
+		next := *r
+		next.Status, next.Why = status, why
+		closed = &next
+		return &next
+	})
+	if closed != nil {
+		showReview(c.bot, "reminder", closed, "", nil)
+	}
 }

@@ -88,7 +88,7 @@ func (c *Cog) remindersScreen(note string) (string, []discordgo.MessageComponent
 	case len(list) > maxListed:
 		lines = append(lines, fmt.Sprintf("…and %d more.", len(list)-maxListed))
 	}
-	v := c.bot.NewView()
+	v := c.bot.NewOfficerView()
 	items := []discordgo.MessageComponent{v.Button("Add reminder", discordgo.PrimaryButton, func(ctx *botkit.Ctx) {
 		ctx.Modal(c.reminderModal(v))
 	})}
@@ -188,7 +188,7 @@ func (c *Cog) accessScreen(note string) (string, []discordgo.MessageComponent) {
 	case len(list) > maxListed:
 		lines = append(lines, fmt.Sprintf("…and %d more.", len(list)-maxListed))
 	}
-	v := c.bot.NewView()
+	v := c.bot.NewOfficerView()
 	items := []discordgo.MessageComponent{v.UserSelect("Block someone…", c.adminOnly(c.block))}
 	if len(options) > 0 {
 		items = append(items, botkit.NewRow, v.Select("Unblock…", options, c.adminOnly(c.unblock)))

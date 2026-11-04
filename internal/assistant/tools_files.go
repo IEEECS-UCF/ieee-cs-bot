@@ -345,9 +345,15 @@ func orderPlaces(channels, threads []*discordgo.Channel) []*discordgo.Channel {
 // findChannel is the channel or thread called name (exactly, else the first
 // whose name contains it). With no name, it's the channel /officer ask ran in.
 func (a *Ask) findChannel(name string) (*discordgo.Channel, error) {
-	places, err := guildPlaces(a.Bot, a.GuildID)
+	all, err := guildPlaces(a.Bot, a.GuildID)
 	if err != nil {
 		return nil, err
+	}
+	var places []*discordgo.Channel
+	for _, c := range all {
+		if a.sees(c.ID) {
+			places = append(places, c)
+		}
 	}
 	name = strings.ToLower(strings.TrimLeft(strings.TrimSpace(name), "#"))
 	if name == "" && a.ChannelID != "" {
@@ -356,7 +362,7 @@ func (a *Ask) findChannel(name string) (*discordgo.Channel, error) {
 				return c, nil
 			}
 		}
-		if a.Bot != nil && a.Bot.S != nil {
+		if a.Bot != nil && a.Bot.S != nil && a.sees(a.ChannelID) {
 			if c := a.Bot.Channel(a.ChannelID); c != nil {
 				return c, nil
 			}
@@ -428,6 +434,9 @@ func (a *Ask) attachment(messageURL, which string) (*discordgo.MessageAttachment
 	found := messageLink.FindStringSubmatch(messageURL)
 	if found == nil {
 		return nil, nil, errors.New("that isn't a Discord message link")
+	}
+	if !a.sees(found[1]) {
+		return nil, nil, errors.New("the asker can't see that channel")
 	}
 	message, err := fetchMessage(a.Bot, found[1], found[2])
 	if err != nil {

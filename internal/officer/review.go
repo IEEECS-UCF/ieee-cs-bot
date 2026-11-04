@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -98,6 +99,42 @@ func GetReview(gid, kind string) *store.Review {
 func PutReview(gid, kind string, r *store.Review) error {
 	_, err := store.EventStore{}.SetReview(gid, kind, r)
 	return err
+}
+
+// ChangeReview is store.EventStore.ChangeReview.
+func ChangeReview(gid, kind string, change func(current *store.Review) *store.Review) (bool, error) {
+	return store.EventStore{}.ChangeReview(gid, kind, change)
+}
+
+// While an approval is posting (it can take a while with a flyer), the
+// review is claimed: a second Approve or an edit waits for it to finish.
+var (
+	claimsMu sync.Mutex
+	claims   = map[string]bool{}
+)
+
+// ClaimReview claims a review for posting; ok is false if it's already
+// claimed. Call release when done.
+func ClaimReview(gid, kind string) (release func(), ok bool) {
+	key := gid + "|" + kind
+	claimsMu.Lock()
+	defer claimsMu.Unlock()
+	if claims[key] {
+		return nil, false
+	}
+	claims[key] = true
+	return func() {
+		claimsMu.Lock()
+		delete(claims, key)
+		claimsMu.Unlock()
+	}, true
+}
+
+// Claimed is whether a review is being posted right now.
+func Claimed(gid, kind string) bool {
+	claimsMu.Lock()
+	defer claimsMu.Unlock()
+	return claims[gid+"|"+kind]
 }
 
 // CanApprove is (ok, why not).
@@ -196,6 +233,16 @@ func MessageParts(eventName, kind string, r *store.Review, when string) (string,
 	return content, embed
 }
 
+// ShowsText is whether a review message shows text (the embed MessageParts
+// made). A message without that embed counts as showing it.
+func ShowsText(m *discordgo.Message, text string) bool {
+	if len(m.Embeds) == 0 {
+		return true
+	}
+	clean := func(s string) string { return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")) }
+	return clean(m.Embeds[0].Description) == clean(botkit.Cut(text, 4096))
+}
+
 // ShowReview edits the review message to match the review. buttons nil
 // takes the buttons off (view=None).
 func ShowReview(b *botkit.Bot, kind string, r *store.Review, when string, buttons []discordgo.MessageComponent) {
@@ -247,6 +294,9 @@ func jumpURL(channel *discordgo.Channel, m *discordgo.Message) string {
 // review and the review message's link, or nil and why not; err is Discord
 // refusing the message.
 func OpenReview(b *botkit.Bot, e eventtext.Event, kind, text string, editor *int64, o ReviewOptions) (*store.Review, string, error) {
+	if n := len([]rune(text)); n > eventtext.MaxPost {
+		return nil, fmt.Sprintf("It's %d characters, and Discord posts at most %d. Shorten it and send it again.", n, eventtext.MaxPost), nil
+	}
 	thread, err := reviewThread(b, e, kind)
 	if err != nil {
 		return nil, "", err

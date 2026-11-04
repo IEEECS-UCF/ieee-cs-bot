@@ -3,6 +3,7 @@ package eventtext_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/eventtext"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/testutil"
@@ -113,5 +114,21 @@ func TestHTMLText(t *testing.T) {
 	}
 	if f := eventtext.CalendarFlyer("", []eventtext.Attachment{{MimeType: "image/png", FileID: "abc"}}); f != "https://drive.google.com/uc?export=download&id=abc" {
 		t.Errorf("flyer %q", f)
+	}
+}
+
+// A long calendar description is cut, never the date, time and place after it.
+func TestALongDescriptionKeepsTheDraftUnderDiscordsLimit(t *testing.T) {
+	start := time.Date(2026, 11, 13, 17, 0, 0, 0, time.UTC)
+	e := eventtext.Event{Name: "Intro to Vulkan", Location: "ENG2 205", Start: start, End: start.Add(2 * time.Hour),
+		Description: strings.Repeat("Learn the graphics pipeline. ", 120)}
+	draft := eventtext.AnnouncementDraft(e, "https://discord.com/events/1/2", "")
+	if n := len([]rune(draft)); n > eventtext.MaxPost {
+		t.Fatalf("%d characters", n)
+	}
+	for _, want := range []string{"ENG2 205", "https://discord.com/events/1/2", "See You There!", "…"} {
+		if !strings.Contains(draft, want) {
+			t.Errorf("lost %q", want)
+		}
 	}
 }

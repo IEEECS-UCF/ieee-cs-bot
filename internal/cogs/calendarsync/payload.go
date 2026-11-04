@@ -94,7 +94,9 @@ func buildPayload(item *calendar.Event, defaultTZ string) (Payload, error) {
 
 // comparable is the fields both sides share, in one form so they can be compared.
 func comparable(name, description, location string, start, end time.Time) map[string]string {
-	description = strings.TrimSpace(description)
+	// The calendar side drops blank lines (buildPayload), so this side does too,
+	// or a description with a blank line never matches and is rewritten every sync
+	description = strings.Join(eventtext.NonEmptyLines(description), "\n")
 	if description == "" {
 		description = "No description provided."
 	}

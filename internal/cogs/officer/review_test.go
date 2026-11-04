@@ -365,3 +365,39 @@ func TestReviewEditNeedsSomeoneElsesApproval(t *testing.T) {
 		t.Errorf("said %q", tc.f.said(notOfficer))
 	}
 }
+
+func TestASecondApproveOrEditWaitsWhileItPosts(t *testing.T) {
+	tc := newTestCog(t)
+	tc.withReviews(t, nil)
+	openReview(t, tc, event(), "Hello", author)
+	release, ok := off.ClaimReview("g1", "announcement") // the first approval, still posting
+	if !ok {
+		t.Fatal("claim")
+	}
+	second := press(tc.bot, other)
+	tc.approve(second, "g1", "announcement")
+	edit := submit(tc.bot, other, map[string]string{"body": "Hello, edited"})
+	tc.submitReviewEdit(edit, "g1", "announcement")
+	release()
+	if len(posts(tc)) != 0 || !strings.Contains(tc.f.lastSaid(second), "approving this right now") ||
+		!strings.Contains(tc.f.lastSaid(edit), "wasn't kept") || off.GetReview("g1", "announcement").Text != "Hello" {
+		t.Fatalf("approve %q, edit %q", tc.f.said(second), tc.f.said(edit))
+	}
+	if again, ok := off.ClaimReview("g1", "announcement"); !ok {
+		t.Error("the claim wasn't released")
+	} else {
+		again()
+	}
+}
+
+func TestApprovingAnOutdatedMessageDoesNothing(t *testing.T) {
+	tc := newTestCog(t)
+	tc.withReviews(t, nil)
+	openReview(t, tc, event(), "Hello", author)
+	ctx := press(tc.bot, other)
+	ctx.I.Message = &discordgo.Message{Embeds: []*discordgo.MessageEmbed{{Description: "Hello from before an edit"}}}
+	tc.approve(ctx, "g1", "announcement")
+	if len(posts(tc)) != 0 || !strings.Contains(tc.f.lastSaid(ctx), "edited since") {
+		t.Fatalf("said %q", tc.f.said(ctx))
+	}
+}

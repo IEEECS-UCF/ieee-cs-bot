@@ -166,7 +166,7 @@ func httpText(err error) string {
 // ---------- review buttons ----------
 
 func (c *Cog) rejectModal(userID int64) *botkit.Modal {
-	return c.b.NewModal("Reject membership", []botkit.TextInput{{
+	return c.b.NewOfficerModal("Reject membership", []botkit.TextInput{{
 		ID: "reason", Label: "Reason (the member sees this in /member status)", Optional: true,
 		MaxLength: 200, Placeholder: "e.g. number not found; membership expired",
 	}}, func(ctx *botkit.Ctx) { c.onReject(live{ctx}, userID) })

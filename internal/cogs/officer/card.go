@@ -121,7 +121,7 @@ type card struct {
 }
 
 func (c *Cog) newCard(gid string) *card {
-	k := &card{cog: c, gid: gid, view: c.bot.NewView()}
+	k := &card{cog: c, gid: gid, view: c.bot.NewOfficerView()}
 	var options []discordgo.SelectMenuOption
 	for _, a := range Actions {
 		options = append(options, discordgo.SelectMenuOption{Label: a.Label, Value: a.Key, Description: a.Description})
@@ -439,7 +439,7 @@ type deleteConfirm struct {
 }
 
 func (k *card) deleteConfirm(e eventtext.Event) *deleteConfirm {
-	d := &deleteConfirm{card: k, event: e, view: k.cog.bot.NewView()}
+	d := &deleteConfirm{card: k, event: e, view: k.cog.bot.NewOfficerView()}
 	d.components = botkit.Rows(
 		d.view.Button("Delete", discordgo.DangerButton, d.delete),
 		d.view.Button("Keep it", discordgo.SecondaryButton, func(ctx *botkit.Ctx) {
@@ -485,7 +485,7 @@ func (d *deleteConfirm) delete(ctx *botkit.Ctx) {
 // ---------- action pickers and forms ----------
 
 func (k *card) ownerPicker() []discordgo.MessageComponent {
-	v := k.cog.bot.NewView()
+	v := k.cog.bot.NewOfficerView()
 	return botkit.Rows(
 		v.UserSelect("Choose an officer", func(ctx *botkit.Ctx) {
 			values := ctx.Values()
@@ -554,7 +554,7 @@ func (k *card) roomPicker(e *eventtext.Event) []discordgo.MessageComponent {
 		}
 		return ""
 	}
-	v := k.cog.bot.NewView()
+	v := k.cog.bot.NewOfficerView()
 	return botkit.Rows(
 		v.Button("Requested…", discordgo.PrimaryButton, func(ctx *botkit.Ctx) { ctx.Modal(k.roomModal("requested", current())) }),
 		v.Button("Confirmed…", discordgo.SuccessButton, func(ctx *botkit.Ctx) { ctx.Modal(k.roomModal("confirmed", current())) }),
@@ -698,7 +698,7 @@ func (k *card) submitSlides(ctx *botkit.Ctx) {
 }
 
 func (k *card) markPicker() []discordgo.MessageComponent {
-	v := k.cog.bot.NewView()
+	v := k.cog.bot.NewOfficerView()
 	var options []discordgo.SelectMenuOption
 	for _, m := range Markable {
 		options = append(options, discordgo.SelectMenuOption{Label: m[1], Value: m[0]})
@@ -716,7 +716,7 @@ func (k *card) markPicker() []discordgo.MessageComponent {
 }
 
 func (k *card) markButtons(step string) []discordgo.MessageComponent {
-	v := k.cog.bot.NewView()
+	v := k.cog.bot.NewOfficerView()
 	set := func(value, label string) func(*botkit.Ctx) {
 		return func(ctx *botkit.Ctx) {
 			k.cog.store.Mark(k.gid, step, value)
@@ -732,7 +732,7 @@ func (k *card) markButtons(step string) []discordgo.MessageComponent {
 }
 
 func (k *card) reminderPicker() []discordgo.MessageComponent {
-	v := k.cog.bot.NewView()
+	v := k.cog.bot.NewOfficerView()
 	pick := func(field string) func(*botkit.Ctx) {
 		return func(ctx *botkit.Ctx) {
 			values := ctx.Values()

@@ -1,11 +1,15 @@
 package assistant
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/assistant"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 )
 
 func message(content string, embeds []*discordgo.MessageEmbed, attachments []*discordgo.MessageAttachment) Message {
@@ -79,5 +83,31 @@ func TestChannelsWithNothingNewAreSkipped(t *testing.T) {
 		if got := UpToDate(c.lastRead, c.lastMessage); got != c.skip {
 			t.Errorf("UpToDate(%q, %q) = %v", c.lastRead, c.lastMessage, got)
 		}
+	}
+}
+
+func TestEveryQueuedChangeIsShownInFull(t *testing.T) {
+	c := &Cog{bot: botkit.NewOffline()}
+	run := &assistant.Ask{AskerID: 1}
+	for n := range 7 {
+		run.Changes = append(run.Changes, assistant.Change{Summary: fmt.Sprintf("send in #channel%d: %s", n, strings.Repeat("x", 320))})
+	}
+	pieces, confirm := c.answerPieces("Here you go.", run, "Sam")
+	if confirm == nil || len(pieces) < 3 {
+		t.Fatalf("%d pieces", len(pieces))
+	}
+	all := strings.Join(pieces[1:], "\n")
+	for n := range 7 {
+		if !strings.Contains(all, fmt.Sprintf("%d. send in #channel%d", n+1, n)) {
+			t.Errorf("change %d isn't shown", n+1)
+		}
+	}
+	for _, p := range pieces {
+		if len([]rune(p)) > 2000 {
+			t.Errorf("a %d-character message", len([]rune(p)))
+		}
+	}
+	if long := packLines([]string{"a", strings.Repeat("y", 4500)}, 2000); len(long) != 4 || long[0] != "a" {
+		t.Errorf("%d pieces", len(long))
 	}
 }

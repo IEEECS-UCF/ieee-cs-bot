@@ -31,7 +31,7 @@ type chapter struct {
 }
 
 func (c *Cog) newChapter() *chapter {
-	ch := &chapter{cog: c, view: c.bot.NewView()}
+	ch := &chapter{cog: c, view: c.bot.NewOfficerView()}
 	v := ch.view
 	ch.components = botkit.Rows(
 		v.Button("Add deadline", discordgo.PrimaryButton, func(ctx *botkit.Ctx) { ctx.Modal(ch.deadlineModal()) }),
@@ -102,7 +102,7 @@ func (ch *chapter) removeDeadline(ctx *botkit.Ctx) {
 		ctx.Ephemeral("No upcoming deadlines.")
 		return
 	}
-	v := ch.cog.bot.NewView()
+	v := ch.cog.bot.NewOfficerView()
 	var options []discordgo.SelectMenuOption
 	for _, d := range upcoming {
 		options = append(options, discordgo.SelectMenuOption{Label: botkit.Cut(pytime.Strftime(d.Date, "%b %-d")+" · "+d.What, 100),
@@ -186,7 +186,7 @@ func (ch *chapter) closeTask(ctx *botkit.Ctx) {
 		ctx.Ephemeral("No open tasks.")
 		return
 	}
-	v := ch.cog.bot.NewView()
+	v := ch.cog.bot.NewOfficerView()
 	var options []discordgo.SelectMenuOption
 	for _, t := range open {
 		options = append(options, discordgo.SelectMenuOption{Label: botkit.Cut(t.Title, 100), Value: t.ID})
@@ -236,7 +236,7 @@ type tablingNamesView struct {
 }
 
 func (c *Cog) newTablingNames() *tablingNamesView {
-	return &tablingNamesView{cog: c, view: c.bot.NewView()}
+	return &tablingNamesView{cog: c, view: c.bot.NewOfficerView()}
 }
 
 func (t *tablingNamesView) load() error {
@@ -342,7 +342,7 @@ func (t *tablingNamesView) preview(ctx *botkit.Ctx) {
 }
 
 func (t *tablingNamesView) personPicker(name string) []discordgo.MessageComponent {
-	v := t.cog.bot.NewView()
+	v := t.cog.bot.NewOfficerView()
 	save := func(ctx *botkit.Ctx, choice *off.Person, shown, note string) {
 		if err := off.SetPerson(name, choice); err != nil {
 			ctx.Fail(err)
@@ -384,7 +384,7 @@ func (c *Cog) monthPicker() []discordgo.MessageComponent {
 		options = append(options, discordgo.SelectMenuOption{Label: label, Value: fmt.Sprintf("%d-%d", year, month), Default: i == 1})
 		year, month = off.PreviousMonth(year, month)
 	}
-	v := c.bot.NewView()
+	v := c.bot.NewOfficerView()
 	return botkit.Rows(v.Select("Pick a month", options, func(ctx *botkit.Ctx) {
 		values := ctx.Values()
 		if len(values) == 0 {
@@ -393,7 +393,7 @@ func (c *Cog) monthPicker() []discordgo.MessageComponent {
 		var y, m int
 		fmt.Sscanf(values[0], "%d-%d", &y, &m)
 		ctx.Defer(true)
-		embeds, data, name, err := c.monthlyReport(y, m)
+		embeds, data, name, _, err := c.monthlyReport(y, m)
 		if err != nil {
 			ctx.Fail(err)
 			return

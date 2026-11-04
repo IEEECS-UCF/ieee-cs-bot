@@ -225,3 +225,21 @@ func TestSnapshotCacheRefreshesWhenStale(t *testing.T) {
 		t.Errorf("fresh fetch: %d %v", calls, err)
 	}
 }
+
+func TestASourceThatFailsKeepsItsLastGoodData(t *testing.T) {
+	previous := NewSnapshot(nil, nil, time.Now())
+	previous.VTools["g1"] = &Listing{}
+	failed := NewSnapshot(nil, nil, time.Now())
+	failed.Missing = []string{"vTools", "GitHub"}
+	previous.Missing = []string{"GitHub"} // never read: nothing to keep
+	KeepLastGood(failed, previous)
+	if failed.VTools["g1"] == nil || len(failed.Missing) != 1 || failed.Missing[0] != "GitHub" {
+		t.Errorf("vtools %v, missing %v", failed.VTools, failed.Missing)
+	}
+	first := NewSnapshot(nil, nil, time.Now())
+	first.Missing = []string{"vTools"}
+	KeepLastGood(first, nil)
+	if len(first.Missing) != 1 {
+		t.Errorf("missing %v", first.Missing)
+	}
+}

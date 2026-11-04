@@ -33,6 +33,9 @@ type View struct {
 	OnTimeout func()
 	// Msg is the message the view was sent on, when the caller sets it.
 	Msg *Msg
+	// officers: every press checks the officer role again, so losing the
+	// role or being blocked takes effect on screens already open.
+	officers bool
 }
 
 // Modal is a form with text inputs. Its submit runs OnSubmit.
@@ -99,6 +102,23 @@ func newToken() string {
 
 // NewView starts a view with the default timeout.
 func (b *Bot) NewView() *View { return b.NewViewTimeout(ViewTimeout) }
+
+// NewOfficerView is NewView for officer screens: each press checks that the
+// presser is (still) an officer.
+func (b *Bot) NewOfficerView() *View { return b.NewView().OfficersOnly() }
+
+// NewOfficerModal is NewModal on an officer view.
+func (b *Bot) NewOfficerModal(title string, inputs []TextInput, f func(*Ctx)) *Modal {
+	return b.NewOfficerView().Modal(title, inputs, f)
+}
+
+// OfficersOnly makes every press check the officer role; it returns v.
+func (v *View) OfficersOnly() *View {
+	v.mu.Lock()
+	v.officers = true
+	v.mu.Unlock()
+	return v
+}
 
 // NewViewTimeout starts a view that expires timeout after its last use.
 func (b *Bot) NewViewTimeout(timeout time.Duration) *View {
@@ -206,11 +226,11 @@ func (r *viewRegistry) dispatch(c *Ctx, customID string) {
 	r.mu.Unlock()
 	n, err := strconv.Atoi(index)
 	var f func(*Ctx)
+	officers := false
 	if v != nil && err == nil {
 		v.mu.Lock()
 		if !v.stopped && n >= 0 && n < len(v.handlers) {
-			f = v.handlers[n]
-			v.expires = time.Now().Add(v.timeout)
+			f, officers = v.handlers[n], v.officers
 		}
 		v.mu.Unlock()
 	}
@@ -218,6 +238,13 @@ func (r *viewRegistry) dispatch(c *Ctx, customID string) {
 		c.Ephemeral("This menu has expired. Run the command again to get a fresh one.")
 		return
 	}
+	if officers && !c.IsOfficer() {
+		c.Ephemeral("Only officers can use this.")
+		return
+	}
+	v.mu.Lock()
+	v.expires = time.Now().Add(v.timeout)
+	v.mu.Unlock()
 	f(c)
 }
 

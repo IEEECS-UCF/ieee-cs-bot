@@ -382,8 +382,10 @@ func (c *Cog) chapterEmbeds() []*discordgo.MessageEmbed {
 		botkit.GuildID(), why)
 }
 
-// monthlyReport is (embeds, csv bytes, file name) for a month, compared with the month before.
-func (c *Cog) monthlyReport(year, month int) ([]*discordgo.MessageEmbed, []byte, string, error) {
+// monthlyReport is (embeds, csv bytes, file name, sources it couldn't read)
+// for a month, compared with the month before. Numbers from a source it
+// couldn't read are missing, so they aren't remembered as that month's.
+func (c *Cog) monthlyReport(year, month int) ([]*discordgo.MessageEmbed, []byte, string, []string, error) {
 	guild := c.guildMembers()
 	if len(guild) == 0 {
 		guild = nil
@@ -391,23 +393,38 @@ func (c *Cog) monthlyReport(year, month int) ([]*discordgo.MessageEmbed, []byte,
 	now := c.now()
 	snap, err := gatherMonth(year, month, now)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", nil, err
 	}
 	summary := off.Summarize(snap, year, month, guild, now)
-	off.Remember(summary)
+	missing := snap.Missing
+	if len(missing) == 0 {
+		off.Remember(summary)
+	}
 	py, pm := off.PreviousMonth(year, month)
 	previous := off.Remembered(py, pm)
 	if previous == nil {
 		psnap, err := gatherMonth(py, pm, now)
 		if err != nil {
-			return nil, nil, "", err
+			return nil, nil, "", nil, err
 		}
 		previous = off.Summarize(psnap, py, pm, guild, now)
 		previous.DiscordMembers = nil // today's count, not that month's
-		off.Remember(previous)
+		if len(psnap.Missing) == 0 {
+			off.Remember(previous)
+		}
+		for _, m := range psnap.Missing {
+			if !slices.Contains(missing, m) {
+				missing = append(missing, m)
+			}
+		}
 	}
 	data, name := off.CSVFile(summary)
-	return off.ReportEmbeds(summary, previous), data, name, nil
+	embeds := off.ReportEmbeds(summary, previous)
+	if len(missing) > 0 {
+		embeds = append([]*discordgo.MessageEmbed{{Description: "⚠️ Couldn't read " + strings.Join(missing, ", ") +
+			", so numbers from it are missing or low below."}}, embeds...)
+	}
+	return embeds, data, name, missing, nil
 }
 
 func (c *Cog) volunteerChannel() *discordgo.Channel {

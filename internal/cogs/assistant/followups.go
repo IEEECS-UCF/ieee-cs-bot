@@ -134,7 +134,8 @@ func (c *Cog) followUp(m *discordgo.Message, member *discordgo.Member, convo *co
 		files = append(files, a.Filename)
 	}
 	run := &assistant.Ask{Bot: c.bot, GuildID: m.GuildID, AskerID: botkit.ID(m.Author.ID), AskerName: name,
-		Knowledge: c.knowledge, ChannelID: m.ChannelID, Events: c.Events, History: convo.history}
+		Knowledge: c.knowledge, ChannelID: m.ChannelID, Events: c.Events, History: convo.history,
+		CanSee: c.canSee(m.Author.ID)}
 	answer := run.FollowUp(context.Background(), m.Content, botkit.JumpURL(m.GuildID, m.ChannelID, m.ID), files)
 	logUsage("/officer ask follow-up", m.Author, run)
 	if run.History != nil {

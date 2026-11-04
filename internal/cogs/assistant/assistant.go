@@ -453,6 +453,41 @@ func Permissions(guild *discordgo.Guild, channel *discordgo.Channel, userID stri
 	return perms
 }
 
+// canSee is Ask.CanSee for userID: whether they can read a channel or
+// thread, remembered for the run. A private thread also needs them in it
+// (or Manage Threads), since its parent's permissions don't cover it.
+func (c *Cog) canSee(userID string) func(string) bool {
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	return func(channelID string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if ok, known := seen[channelID]; known {
+			return ok
+		}
+		ok := c.sees(userID, channelID)
+		seen[channelID] = ok
+		return ok
+	}
+}
+
+func (c *Cog) sees(userID, channelID string) bool {
+	guild, err := c.bot.S.State.Guild(c.guildID)
+	channel := c.bot.Channel(channelID)
+	if err != nil || channel == nil {
+		return false
+	}
+	perms := c.permissions(guild, channel, userID)
+	if perms&discordgo.PermissionViewChannel == 0 {
+		return false
+	}
+	if channel.Type != discordgo.ChannelTypeGuildPrivateThread || perms&discordgo.PermissionManageThreads != 0 {
+		return true
+	}
+	_, err = c.bot.S.ThreadMember(channelID, userID, false)
+	return err == nil
+}
+
 // OfficerOnly is true if regular members can't see this channel (threads go
 // by their parent).
 func (c *Cog) OfficerOnly(channelID string) bool {
@@ -485,7 +520,7 @@ func (c *Cog) Ask(ctx *botkit.Ctx, question string) {
 		name = assistant.MemberDisplayName(m)
 	}
 	run := &assistant.Ask{Bot: c.bot, GuildID: ctx.I.GuildID, AskerID: ctx.UserID(), AskerName: name,
-		Knowledge: c.knowledge, ChannelID: ctx.I.ChannelID, Events: c.Events}
+		Knowledge: c.knowledge, ChannelID: ctx.I.ChannelID, Events: c.Events, CanSee: c.canSee(user.ID)}
 	answer := run.Run(context.Background(), question)
 	logUsage("/officer ask", user, run)
 	convo := c.convos.start(run, ctx.I.ChannelID)
@@ -532,12 +567,51 @@ func (c *Cog) answerPieces(text string, run *assistant.Ask, name string) ([]stri
 	if len(run.Changes) == 0 {
 		return pieces, nil
 	}
-	var listed []string
+	// Every change is listed in full, over several messages if need be:
+	// Confirm applies all of them, so the officer has to be able to see them all.
+	listed := []string{fmt.Sprintf("**Waiting for %s to confirm %s:**", name, plural(len(run.Changes), "change"))}
 	for n, ch := range run.Changes {
 		listed = append(listed, fmt.Sprintf("%d. %s", n+1, ch.Summary))
 	}
-	pieces = append(pieces, botkit.Cut(fmt.Sprintf("**Waiting for %s to confirm:**\n%s", name, strings.Join(listed, "\n")), 2000))
+	pieces = append(pieces, packLines(listed, 2000)...)
 	return pieces, newConfirm(c.bot, run.AskerID, run.Changes)
+}
+
+func plural(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
+}
+
+// packLines joins lines into as few messages of at most limit characters as
+// it can, without splitting a line unless the line alone is too long.
+func packLines(lines []string, limit int) []string {
+	var out []string
+	var cur []rune
+	flush := func() {
+		if len(cur) > 0 {
+			out = append(out, string(cur))
+			cur = nil
+		}
+	}
+	for _, line := range lines {
+		r := []rune(line)
+		if len(cur) > 0 && len(cur)+1+len(r) > limit {
+			flush()
+		}
+		for len(r) > limit {
+			flush()
+			out = append(out, string(r[:limit]))
+			r = r[limit:]
+		}
+		if len(cur) > 0 {
+			cur = append(cur, '\n')
+		}
+		cur = append(cur, r...)
+	}
+	flush()
+	return out
 }
 
 // confirmChanges is Confirm or Cancel for the changes /officer ask queued.
@@ -554,7 +628,7 @@ type confirmChanges struct {
 }
 
 func newConfirm(b *botkit.Bot, askerID int64, changes []assistant.Change) *confirmChanges {
-	v := &confirmChanges{view: b.NewViewTimeout(ConfirmSeconds * time.Second), askerID: askerID, changes: changes}
+	v := &confirmChanges{view: b.NewViewTimeout(ConfirmSeconds * time.Second).OfficersOnly(), askerID: askerID, changes: changes}
 	v.confirm = v.view.Button("Confirm", discordgo.SuccessButton, v.check(v.onConfirm))
 	v.cancel = v.view.Button("Cancel", discordgo.SecondaryButton, v.check(v.onCancel))
 	v.view.OnTimeout = v.onTimeout
@@ -588,7 +662,8 @@ func (v *confirmChanges) takeTurn() bool {
 }
 
 func (v *confirmChanges) onConfirm(c *botkit.Ctx) {
-	if !v.takeTurn() {
+	if !v.takeTurn() { // a double click, or Cancel got there first
+		c.DeferUpdate()
 		return
 	}
 	c.DeferUpdate()
@@ -603,15 +678,22 @@ func (v *confirmChanges) onConfirm(c *botkit.Ctx) {
 	}
 	log.Printf("/officer ask changes confirmed by %s (%s): %v", c.User().Username, c.User().ID, lines)
 	v.view.Stop()
-	content := botkit.Cut(strings.Join(lines, "\n"), 2000)
-	c.ComponentMessage().Edit(botkit.Edit{Content: &content, Components: botkit.Clear[discordgo.MessageComponent](),
+	pieces := packLines(lines, 2000)
+	c.ComponentMessage().Edit(botkit.Edit{Content: &pieces[0], Components: botkit.Clear[discordgo.MessageComponent](),
 		Mentions: botkit.NoMentions()})
+	for _, more := range pieces[1:] {
+		if _, err := c.Followup(botkit.Reply{Content: more, Mentions: botkit.NoMentions()}); err != nil {
+			log.Printf("/officer ask: couldn't post the rest of the results: %v", err)
+			break
+		}
+	}
 }
 
 func (v *confirmChanges) onCancel(c *botkit.Ctx) {
-	v.mu.Lock()
-	v.done = true
-	v.mu.Unlock()
+	if !v.takeTurn() { // Confirm got there first
+		c.DeferUpdate()
+		return
+	}
 	v.view.Stop()
 	content := "Cancelled; nothing was changed."
 	c.Update(botkit.Edit{Content: &content, Components: botkit.Clear[discordgo.MessageComponent]()})

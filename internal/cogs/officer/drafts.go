@@ -155,7 +155,7 @@ func (c *Cog) newDraft(k *card, e eventtext.Event, text, discordLink, opener str
 	if opener == "" {
 		opener = "@everyone"
 	}
-	d := &eventDraft{draftBase: draftBase{cog: c, view: c.bot.NewView(), text: text}, card: k, event: e,
+	d := &eventDraft{draftBase: draftBase{cog: c, view: c.bot.NewOfficerView(), text: text}, card: k, event: e,
 		discordLink: discordLink, opener: opener}
 	d.components = draftButtons(d)
 	return d
@@ -215,6 +215,9 @@ func (d *eventDraft) sendOnce(ctx *botkit.Ctx, text string) string {
 // withAI replaces the draft with one Claude writes in the style of recent #announcements posts.
 func (d *eventDraft) withAI(ctx *botkit.Ctx) {
 	text, why := aiDraft(d.event, eventtext.PlainDescription(d.event), d.discordLink, d.opener, aidraft.ExamplePosts())
+	if n := len([]rune(text)); n > eventtext.MaxPost {
+		text, why = "", fmt.Sprintf("Claude's draft came out at %d characters, over Discord's %d. Try again, or edit the draft yourself.", n, eventtext.MaxPost)
+	}
 	if text == "" {
 		followup(ctx, why)
 		return
@@ -261,7 +264,7 @@ func submitEmergency(p poster, ctx *botkit.Ctx) {
 // ---------- general announcements (/officer announce) ----------
 
 func (c *Cog) announceModal(image *discordgo.MessageAttachment) *botkit.Modal {
-	return c.bot.NewModal("New announcement", []botkit.TextInput{
+	return c.bot.NewOfficerModal("New announcement", []botkit.TextInput{
 		{ID: "body", Label: "The announcement, or notes for Claude", Paragraph: true, MaxLength: 2000,
 			Placeholder: "Write the post, or jot notes and press Draft with AI next."},
 	}, func(ctx *botkit.Ctx) {
@@ -280,7 +283,7 @@ type generalDraft struct {
 }
 
 func (c *Cog) newGeneral(text string, image *discordgo.MessageAttachment) *generalDraft {
-	g := &generalDraft{draftBase: draftBase{cog: c, view: c.bot.NewView(), text: text}, image: image}
+	g := &generalDraft{draftBase: draftBase{cog: c, view: c.bot.NewOfficerView(), text: text}, image: image}
 	g.components = draftButtons(g)
 	return g
 }
@@ -361,6 +364,9 @@ func (g *generalDraft) withAI(ctx *botkit.Ctx) {
 	}
 	g.mu.Unlock()
 	text, why := aiDraftFromNotes(notes, aidraft.ExamplePosts())
+	if n := len([]rune(text)); n > eventtext.MaxPost {
+		text, why = "", fmt.Sprintf("Claude's draft came out at %d characters, over Discord's %d. Try again, or edit the draft yourself.", n, eventtext.MaxPost)
+	}
 	if text == "" {
 		followup(ctx, why)
 		return

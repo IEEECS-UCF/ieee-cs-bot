@@ -14,6 +14,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -186,6 +187,10 @@ type Snapshot struct {
 	Store                map[string]*store.Record
 	FetchedAt            time.Time
 	Problems             []string // sources that couldn't be read this time
+	// Missing is the sources that couldn't be read and have nothing older to
+	// stand in (a cache refresh keeps the last good data of a source that
+	// fails). Their maps are empty, so they'd look like "not listed" etc.
+	Missing []string
 }
 
 // NewSnapshot is an empty snapshot of events.
@@ -231,6 +236,7 @@ func (s *Snapshot) Clone() *Snapshot {
 	c.RemindersSent = cloneMap(s.RemindersSent)
 	c.Store = cloneMap(s.Store)
 	c.Problems = append([]string(nil), s.Problems...)
+	c.Missing = append([]string(nil), s.Missing...)
 	return &c
 }
 
@@ -744,6 +750,7 @@ func runJobs(snap *Snapshot, jobs []job, say bool) {
 	for i, j := range jobs {
 		if errs[i] != nil {
 			snap.Problems = append(snap.Problems, fmt.Sprintf("%s: %v", j.name, errs[i]))
+			snap.Missing = append(snap.Missing, j.name)
 			if say {
 				log.Printf("Officer data: couldn't read %s: %v", j.name, errs[i])
 			}
@@ -828,8 +835,38 @@ func (c *SnapshotCache) Get(fresh bool) (*Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	KeepLastGood(snap, current)
 	c.Set(snap)
 	return snap, nil
+}
+
+// KeepLastGood fills in each source snap couldn't read with what previous
+// read, so a source that fails for a moment doesn't make every event look
+// unlisted. Sources with nothing to fall back on stay in snap.Missing.
+func KeepLastGood(snap, previous *Snapshot) {
+	if previous == nil || len(snap.Missing) == 0 {
+		return
+	}
+	var missing []string
+	for _, name := range snap.Missing {
+		if slices.Contains(previous.Missing, name) {
+			missing = append(missing, name)
+			continue
+		}
+		switch name {
+		case "KnightConnect":
+			snap.KnightConnect, snap.KnightConnectOrphans = cloneMap(previous.KnightConnect), previous.KnightConnectOrphans
+		case "vTools":
+			snap.VTools = cloneMap(previous.VTools)
+		case "GitHub":
+			snap.Slides = cloneMap(previous.Slides)
+		case "check-in forms":
+			snap.Checkins = cloneMap(previous.Checkins)
+		default:
+			missing = append(missing, name)
+		}
+	}
+	snap.Missing = missing
 }
 
 // Current is the cached snapshot without refreshing it (nil before the first fetch).
