@@ -1,8 +1,10 @@
 package officer
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -95,9 +97,9 @@ func (c *Cog) approve(ctx *botkit.Ctx, gid, kind string) {
 				"so nothing was posted. It's still waiting for approval.")
 			return
 		}
-		message, err := c.postApproved(ctx, channel, current)
+		message, err := c.postApproved(ctx, channel, kind, current)
 		if err != nil {
-			followup(ctx, fmt.Sprintf("Discord didn't accept the post (%v). Nothing was posted; try again.", err))
+			followup(ctx, fmt.Sprintf("Nothing was posted (%v). It's still waiting for approval; try again.", err))
 			return
 		}
 		posted = botkit.JumpURL(channel.GuildID, channel.ID, message.ID)
@@ -148,19 +150,50 @@ func (c *Cog) approve(ctx *botkit.Ctx, gid, kind string) {
 	followup(ctx, reply)
 }
 
-// postApproved posts the approved text. The flyer reviewers saw is attached
-// to the review message; it posts that same file.
-func (c *Cog) postApproved(ctx *botkit.Ctx, channel *discordgo.Channel, r *store.Review) (*discordgo.Message, error) {
-	send := &discordgo.MessageSend{Content: r.Text, AllowedMentions: off.MentionsIn(r.Text)}
-	if m := ctx.Message(); r.HasFlyer && m != nil && len(m.Attachments) > 0 {
-		a := m.Attachments[0]
-		data, err := readAttachment(a.URL)
+// postApproved posts the approved text (with the @everyone WithPing adds)
+// and the flyer reviewers saw on the review message.
+func (c *Cog) postApproved(ctx *botkit.Ctx, channel *discordgo.Channel, kind string, r *store.Review) (*discordgo.Message, error) {
+	text := off.WithPing(kind, r.Text)
+	send := &discordgo.MessageSend{Content: text, AllowedMentions: off.MentionsIn(text)}
+	if r.HasFlyer {
+		name, data, err := reviewFlyer(ctx.Message(), r)
 		if err != nil {
 			return nil, err
 		}
-		send.Files = []*discordgo.File{file(a.Filename, data)}
+		send.Files = []*discordgo.File{file(name, data)}
 	}
 	return c.bot.S.ChannelMessageSendComplex(channel.ID, send)
+}
+
+// reviewFlyer downloads the flyer shown on a review message. The review
+// shows it inside its embed (attachment://), and Discord then lists it as the
+// embed's image instead of as one of the message's attachments, so it's
+// usually found there.
+func reviewFlyer(m *discordgo.Message, r *store.Review) (string, []byte, error) {
+	name, url := r.Image, ""
+	if name == "" {
+		name = off.FlyerFile
+	}
+	if m != nil {
+		if len(m.Attachments) > 0 {
+			name, url = m.Attachments[0].Filename, m.Attachments[0].URL
+		} else {
+			for _, e := range m.Embeds {
+				if e.Image != nil && strings.HasPrefix(e.Image.URL, "http") {
+					url = e.Image.URL
+					break
+				}
+			}
+		}
+	}
+	if url == "" {
+		return "", nil, errors.New("the flyer isn't on the review message anymore")
+	}
+	data, err := readAttachment(url)
+	if err != nil {
+		return "", nil, fmt.Errorf("couldn't download the flyer: %w", err)
+	}
+	return name, data, nil
 }
 
 func (c *Cog) reviewEdit(gid, kind string, current *store.Review) *botkit.Modal {
@@ -172,6 +205,10 @@ func (c *Cog) reviewEdit(gid, kind string, current *store.Review) *botkit.Modal 
 func (c *Cog) submitReviewEdit(ctx *botkit.Ctx, gid, kind string) {
 	if off.Claimed(gid, kind) {
 		ctx.Ephemeral("This was being posted when you saved, so your edit wasn't kept.")
+		return
+	}
+	if why := off.TooLong(kind, ctx.Field("body")); why != "" {
+		ctx.Ephemeral(why + " Your edit wasn't saved.")
 		return
 	}
 	var changed *store.Review

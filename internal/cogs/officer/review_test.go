@@ -92,7 +92,7 @@ func TestOnlyAnotherOfficerCanApproveAndThenItPosts(t *testing.T) {
 	}
 	theirs := press(tc.bot, other)
 	tc.approve(theirs, "g1", "announcement")
-	if got := contents(posts(tc)); !slices.Equal(got, []string{"Hello"}) || !strings.HasPrefix(tc.f.lastSaid(theirs), "Posted:") {
+	if got := contents(posts(tc)); !slices.Equal(got, []string{"@everyone\nHello"}) || !strings.HasPrefix(tc.f.lastSaid(theirs), "Posted:") {
 		t.Fatalf("posted %q, said %q", got, tc.f.said(theirs))
 	}
 	saved := off.GetReview("g1", "announcement")
@@ -137,6 +137,41 @@ func TestTheFlyerReviewersSawIsPostedWithTheAnnouncement(t *testing.T) {
 	tc.approve(withAttachment(press(tc.bot, other), "flyer.png"), "g1", "announcement")
 	if got := posts(tc); len(got) != 1 || !slices.Equal(got[0].Files, []string{"flyer.png"}) {
 		t.Errorf("posted %v", got)
+	}
+}
+
+// The review shows its flyer inside the embed, and Discord then lists the file
+// as the embed's image, not as an attachment: that's where the flyer is found.
+func TestTheFlyerIsFoundInTheReviewEmbed(t *testing.T) {
+	tc := newTestCog(t)
+	tc.withReviews(t, &fakeSync{})
+	flyerBytes = []byte("png")
+	d := tc.draft(event(), "Python Graphing Workshop", "", "")
+	d.sendOnce(press(tc.bot, author), "Python Graphing Workshop")
+	ctx := press(tc.bot, other)
+	ctx.I.Message = &discordgo.Message{ID: "61", ChannelID: "50", Embeds: []*discordgo.MessageEmbed{{
+		Description: "Python Graphing Workshop",
+		Image:       &discordgo.MessageEmbedImage{URL: "https://cdn.discordapp.com/attachments/50/61/flyer.png"}}}}
+	tc.approve(ctx, "g1", "announcement")
+	got := posts(tc)
+	if len(got) != 1 || !slices.Equal(got[0].Files, []string{"flyer.png"}) || got[0].content() != "@everyone\nPython Graphing Workshop" {
+		t.Fatalf("posted %v, said %q", got, tc.f.said(ctx))
+	}
+}
+
+// A flyer the review promised but that's gone posts nothing, instead of the
+// text alone.
+func TestAMissingFlyerPostsNothing(t *testing.T) {
+	tc := newTestCog(t)
+	tc.withReviews(t, &fakeSync{})
+	flyerBytes = []byte("png")
+	d := tc.draft(event(), "Hello", "", "")
+	d.sendOnce(press(tc.bot, author), "Hello")
+	ctx := press(tc.bot, other)
+	ctx.I.Message = &discordgo.Message{ID: "61", ChannelID: "50", Embeds: []*discordgo.MessageEmbed{{Description: "Hello"}}}
+	tc.approve(ctx, "g1", "announcement")
+	if len(posts(tc)) != 0 || !strings.Contains(tc.f.lastSaid(ctx), "flyer") || off.GetReview("g1", "announcement").Status != off.Pending {
+		t.Errorf("posted %v, said %q", posts(tc), tc.f.said(ctx))
 	}
 }
 
@@ -272,7 +307,7 @@ func TestAnEmergencyPostGoesOutNowAndLeavesARecord(t *testing.T) {
 	d := tc.draft(event(), "Room changed to ENG1 101!", "", "")
 	url, why := d.sendEmergency(press(tc.bot, author), "Room changed to ENG1 101!", "Room moved an hour before")
 	got := posts(tc)
-	if url == "" || len(got) != 1 || got[0].content() != "Room changed to ENG1 101!" || len(got[0].Files) != 1 {
+	if url == "" || len(got) != 1 || got[0].content() != "@everyone\nRoom changed to ENG1 101!" || len(got[0].Files) != 1 {
 		t.Fatalf("url %q why %q posted %v", url, why, got)
 	}
 	sent := reviewed(tc)

@@ -320,7 +320,8 @@ func TestAnEmergencyPostGoesOutNowAndLeavesARecord(t *testing.T) {
 	url, why := PostWithoutReview(b, event(), "announcement", "Room changed to ENG1 101!", author, "Room moved an hour before",
 		[]byte("png"), "")
 	posts := f.to("9")
-	if url == "" || why != "" || len(posts) != 1 || posts[0].msg.Content != "Room changed to ENG1 101!" || len(posts[0].files) != 1 {
+	if url == "" || why != "" || len(posts) != 1 || posts[0].msg.Content != "@everyone\nRoom changed to ENG1 101!" ||
+		!slices.Contains(posts[0].msg.AllowedMentions.Parse, discordgo.AllowedMentionTypeEveryone) || len(posts[0].files) != 1 {
 		t.Fatalf("%q %q %v", url, why, posts)
 	}
 	notice := f.sent[len(f.sent)-1].msg.Content
@@ -352,5 +353,36 @@ func TestAnEmergencyGeneralPost(t *testing.T) {
 	if GetReview("general_777", "general").Emergency != "Campus closure" ||
 		!strings.Contains(f.sent[len(f.sent)-1].msg.Content, "Campus closure") {
 		t.Error("no record of the emergency post")
+	}
+}
+
+// ---------- the @everyone an announcement opens with ----------
+
+func TestAnAnnouncementThatPingsNobodyOpensWithEveryone(t *testing.T) {
+	cases := []struct{ kind, text, want string }{
+		{"announcement", "Python Graphing Workshop Tuesday", "@everyone\nPython Graphing Workshop Tuesday"},
+		{"announcement", "# Hey @everyone!\nWorkshop Tuesday", "# Hey @everyone!\nWorkshop Tuesday"},
+		{"announcement", "# Hey <@&777>!\nWorkshop Tuesday", "# Hey <@&777>!\nWorkshop Tuesday"},
+		{"general", "Room change", "Room change"},
+		{"reminder", "Tomorrow!", "Tomorrow!"},
+	}
+	for _, c := range cases {
+		if got := WithPing(c.kind, c.text); got != c.want {
+			t.Errorf("WithPing(%q, %q) = %q", c.kind, c.text, got)
+		}
+	}
+	r := &store.Review{Text: "Workshop Tuesday", Status: Pending}
+	if !strings.Contains(StatusLine("announcement", r, ""), "posts with @everyone") {
+		t.Error("reviewers aren't told about the @everyone")
+	}
+	r.Text = "@everyone Workshop Tuesday"
+	if strings.Contains(StatusLine("announcement", r, ""), "posts with @everyone") {
+		t.Error("told about an @everyone it doesn't add")
+	}
+	if why := TooLong("announcement", strings.Repeat("a", eventtext.MaxPost)); !strings.Contains(why, "@everyone") {
+		t.Errorf("a post that only overflows with the @everyone: %q", why)
+	}
+	if why := TooLong("announcement", "@everyone "+strings.Repeat("a", 100)); why != "" {
+		t.Error(why)
 	}
 }

@@ -80,6 +80,38 @@ func MentionsIn(text string) *discordgo.MessageAllowedMentions {
 	return allowed
 }
 
+// WithPing is the text an announcement posts as. Officers often rewrite the
+// draft and drop its opening ping, so an announcement that mentions nobody
+// opens with @everyone on its own line. Other kinds post as written.
+func WithPing(kind, text string) string {
+	if kind != "announcement" || strings.Contains(text, "@everyone") || roleMention.MatchString(text) {
+		return text
+	}
+	return "@everyone\n" + text
+}
+
+// PingNote tells reviewers when WithPing adds the @everyone.
+func PingNote(kind, text string) string {
+	if WithPing(kind, text) == text {
+		return ""
+	}
+	return "\nIt pings nobody as written, so it posts with @everyone on the first line."
+}
+
+// TooLong is why a post can't go out as written ("" if it fits), counting
+// the @everyone WithPing adds.
+func TooLong(kind, text string) string {
+	n := len([]rune(WithPing(kind, text)))
+	if n <= eventtext.MaxPost {
+		return ""
+	}
+	if WithPing(kind, text) != text {
+		return fmt.Sprintf("With the @everyone it opens with, it's %d characters, and Discord posts at most %d. "+
+			"Shorten it and send it again.", n, eventtext.MaxPost)
+	}
+	return fmt.Sprintf("It's %d characters, and Discord posts at most %d. Shorten it and send it again.", n, eventtext.MaxPost)
+}
+
 // TargetChannelID is where an approved post goes (0 while posting is turned off).
 func TargetChannelID(kind string) int64 {
 	value := os.Getenv("REMINDER_CHANNEL_ID")
@@ -187,7 +219,7 @@ func StatusLine(kind string, r *store.Review, when string) string {
 		}
 		return fmt.Sprintf("Written by %s. Approved by <@%s> and posted: %s", by, approver, r.Posted)
 	case Approved:
-		return fmt.Sprintf("Written by %s. Approved by <@%s>; posts in %s%s.", by, approver, where, at)
+		return fmt.Sprintf("Written by %s. Approved by <@%s>; posts in %s%s.%s", by, approver, where, at, PingNote(kind, r.Text))
 	case Missed:
 		return fmt.Sprintf("Written by %s. Nobody approved it before the event started, so it was never posted.", by)
 	case Cancelled:
@@ -201,7 +233,8 @@ func StatusLine(kind string, r *store.Review, when string) string {
 	if r.Editor != nil && *r.Editor != 0 {
 		who = fmt.Sprintf("an officer other than <@%d>", *r.Editor)
 	}
-	return fmt.Sprintf("Written by %s. Needs %s to approve it before it posts in %s%s.%s", by, who, where, at, FlyerNote(kind, r))
+	return fmt.Sprintf("Written by %s. Needs %s to approve it before it posts in %s%s.%s%s", by, who, where, at,
+		FlyerNote(kind, r), PingNote(kind, r.Text))
 }
 
 func FlyerNote(kind string, r *store.Review) string {
@@ -294,8 +327,8 @@ func jumpURL(channel *discordgo.Channel, m *discordgo.Message) string {
 // review and the review message's link, or nil and why not; err is Discord
 // refusing the message.
 func OpenReview(b *botkit.Bot, e eventtext.Event, kind, text string, editor *int64, o ReviewOptions) (*store.Review, string, error) {
-	if n := len([]rune(text)); n > eventtext.MaxPost {
-		return nil, fmt.Sprintf("It's %d characters, and Discord posts at most %d. Shorten it and send it again.", n, eventtext.MaxPost), nil
+	if why := TooLong(kind, text); why != "" {
+		return nil, why, nil
 	}
 	thread, err := reviewThread(b, e, kind)
 	if err != nil {
@@ -368,7 +401,8 @@ func PostWithoutReview(b *botkit.Bot, e eventtext.Event, kind, text string, user
 	if channel == nil {
 		return "", "Posting announcements is turned off right now (no announcements channel set). Nothing was posted."
 	}
-	send := &discordgo.MessageSend{Content: text, AllowedMentions: MentionsIn(text)}
+	post := WithPing(kind, text)
+	send := &discordgo.MessageSend{Content: post, AllowedMentions: MentionsIn(post)}
 	if len(image) > 0 {
 		send.Files = []*discordgo.File{{Name: imageName, Reader: bytes.NewReader(image)}}
 	}
