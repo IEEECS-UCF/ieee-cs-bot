@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -71,13 +72,44 @@ var roleMention = regexp.MustCompile(`<@&(\d+)>`)
 // MentionsIn allows exactly the mentions written into an approved post, nothing else.
 func MentionsIn(text string) *discordgo.MessageAllowedMentions {
 	allowed := &discordgo.MessageAllowedMentions{Parse: []discordgo.AllowedMentionType{}}
-	if strings.Contains(text, "@everyone") {
+	if strings.Contains(text, "@everyone") || strings.Contains(text, "@here") { // Discord's "everyone" covers both
 		allowed.Parse = append(allowed.Parse, discordgo.AllowedMentionTypeEveryone)
 	}
 	for _, m := range roleMention.FindAllStringSubmatch(text, -1) {
 		allowed.Roles = append(allowed.Roles, m[1])
 	}
 	return allowed
+}
+
+// guildRoles is the server's roles (swapped in tests).
+var guildRoles = func(b *botkit.Bot) []*discordgo.Role {
+	if b == nil || b.S == nil || b.S.State == nil {
+		return nil
+	}
+	g, err := b.S.State.Guild(botkit.GuildID())
+	if err != nil {
+		return nil
+	}
+	return g.Roles
+}
+
+// WithRoleMentions turns a role typed by name in a post ("@workshops", any
+// case) into the role's mention, so it pings when it posts. Discord only does
+// that in its own message box, not in the bot's text boxes. Longer names go
+// first ("@Workshop Leads" before "@Workshop"); @everyone, @here and bot roles
+// stay as they are.
+func WithRoleMentions(b *botkit.Bot, text string) string {
+	roles := slices.Clone(guildRoles(b))
+	slices.SortFunc(roles, func(x, y *discordgo.Role) int { return len(y.Name) - len(x.Name) })
+	for _, r := range roles {
+		name := strings.TrimPrefix(r.Name, "@")
+		if r.Managed || r.ID == botkit.GuildID() || name == "" || strings.EqualFold(name, "everyone") || strings.EqualFold(name, "here") {
+			continue
+		}
+		re := regexp.MustCompile(`(?i)(^|[^\w<&@])@` + regexp.QuoteMeta(name) + `($|[^\w])`)
+		text = re.ReplaceAllString(text, "${1}<@&"+r.ID+">${2}")
+	}
+	return text
 }
 
 // WithPing is the text an announcement posts as. Officers often rewrite the
@@ -327,6 +359,7 @@ func jumpURL(channel *discordgo.Channel, m *discordgo.Message) string {
 // review and the review message's link, or nil and why not; err is Discord
 // refusing the message.
 func OpenReview(b *botkit.Bot, e eventtext.Event, kind, text string, editor *int64, o ReviewOptions) (*store.Review, string, error) {
+	text = WithRoleMentions(b, text)
 	if why := TooLong(kind, text); why != "" {
 		return nil, why, nil
 	}
@@ -401,6 +434,7 @@ func PostWithoutReview(b *botkit.Bot, e eventtext.Event, kind, text string, user
 	if channel == nil {
 		return "", "Posting announcements is turned off right now (no announcements channel set). Nothing was posted."
 	}
+	text = WithRoleMentions(b, text)
 	post := WithPing(kind, text)
 	send := &discordgo.MessageSend{Content: post, AllowedMentions: MentionsIn(post)}
 	if len(image) > 0 {

@@ -207,7 +207,8 @@ func (c *Cog) submitReviewEdit(ctx *botkit.Ctx, gid, kind string) {
 		ctx.Ephemeral("This was being posted when you saved, so your edit wasn't kept.")
 		return
 	}
-	if why := off.TooLong(kind, ctx.Field("body")); why != "" {
+	body := off.WithRoleMentions(c.bot, ctx.Field("body"))
+	if why := off.TooLong(kind, body); why != "" {
 		ctx.Ephemeral(why + " Your edit wasn't saved.")
 		return
 	}
@@ -216,7 +217,7 @@ func (c *Cog) submitReviewEdit(ctx *botkit.Ctx, gid, kind string) {
 		if r == nil || (r.Status != off.Pending && r.Status != off.Approved) {
 			return nil
 		}
-		changed = off.Edited(r, ctx.Field("body"), ctx.UserID())
+		changed = off.Edited(r, body, ctx.UserID())
 		return changed
 	})
 	if err != nil {

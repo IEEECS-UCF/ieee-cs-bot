@@ -386,3 +386,48 @@ func TestAnAnnouncementThatPingsNobodyOpensWithEveryone(t *testing.T) {
 		t.Error(why)
 	}
 }
+
+// ---------- roles typed by name ----------
+
+// "@workshops" typed into /officer announce pings the Workshops role, the way
+// typing it in Discord's own message box would.
+func TestARoleTypedByNamePingsWhenItPosts(t *testing.T) {
+	t.Setenv("GUILD_ID", "9")
+	old := guildRoles
+	guildRoles = func(*botkit.Bot) []*discordgo.Role {
+		return []*discordgo.Role{{ID: "9", Name: "@everyone"}, {ID: "111", Name: "Workshops"},
+			{ID: "112", Name: "Workshop Leads"}, {ID: "113", Name: "IEEE CS UCF Bot", Managed: true}}
+	}
+	t.Cleanup(func() { guildRoles = old })
+	cases := map[string]string{
+		"@workshops reminder that the workshop starts in 20 minutes": "<@&111> reminder that the workshop starts in 20 minutes",
+		"Paging @Workshop Leads and @WORKSHOPS!":                     "Paging <@&112> and <@&111>!",
+		"@everyone and @here stay as they are":                       "@everyone and @here stay as they are",
+		"email workshops@ucf.edu, or @workshopsfan":                  "email workshops@ucf.edu, or @workshopsfan",
+		"already <@&111>":                "already <@&111>",
+		"@IEEE CS UCF Bot is a bot role": "@IEEE CS UCF Bot is a bot role",
+	}
+	for in, want := range cases {
+		if got := WithRoleMentions(nil, in); got != want {
+			t.Errorf("%q -> %q, want %q", in, got, want)
+		}
+	}
+	b, f := fakeBot(t, true)
+	t.Setenv("ANNOUNCE_CHANNEL_ID", "9")
+	r, why, err := OpenReview(b, event(), "general", "@workshops reminder that the workshop starts in 20 minutes", &author, ReviewOptions{})
+	if r == nil || r.Text != "<@&111> reminder that the workshop starts in 20 minutes" {
+		t.Fatalf("review %+v %q %v", r, why, err)
+	}
+	if m := MentionsIn(r.Text); len(m.Roles) != 1 || m.Roles[0] != "111" || len(m.Parse) != 0 {
+		t.Errorf("mentions %+v", m)
+	}
+	PostWithoutReview(b, event(), "general", "@Workshops room moved to ENG2 102", author, "room change", nil, "")
+	posts := f.to("9")
+	if len(posts) != 1 || posts[0].msg.Content != "<@&111> room moved to ENG2 102" ||
+		!slices.Equal(posts[0].msg.AllowedMentions.Roles, []string{"111"}) {
+		t.Errorf("emergency post %+v", posts)
+	}
+	if m := MentionsIn("@here, we're starting"); !slices.Contains(m.Parse, discordgo.AllowedMentionTypeEveryone) {
+		t.Error("@here didn't ping")
+	}
+}
