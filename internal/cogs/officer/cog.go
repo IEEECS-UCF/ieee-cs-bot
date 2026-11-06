@@ -100,6 +100,9 @@ var (
 	aiLinkedIn = func(in aidraft.LinkedInInput) (aidraft.LinkedInDraft, string) {
 		return aidraft.DraftLinkedIn(context.Background(), in)
 	}
+	aiRevise = func(t *aidraft.Thread, feedback string) (*aidraft.Thread, string) {
+		return aidraft.Revise(context.Background(), t, feedback)
+	}
 	// eventMessages is what Discord said about an event (the assistant cog's
 	// cache; nil if that cog isn't loaded)
 	eventMessages = func(b *botkit.Bot, e eventtext.Event) []cogapi.Snippet {

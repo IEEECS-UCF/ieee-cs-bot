@@ -300,8 +300,9 @@ func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 		found = append(found, materialLinks(m.Text)...)
 	}
 	materials := pickMaterials(linked, found)
-	d, why := aiLinkedIn(aidraft.LinkedInInput{Event: e, Description: eventtext.PlainDescription(e), RanBy: ctx.Field("ran"),
-		Notes: ctx.Field("notes"), Materials: materials, Discord: discord})
+	in := aidraft.LinkedInInput{Event: e, Description: eventtext.PlainDescription(e), RanBy: ctx.Field("ran"),
+		Notes: ctx.Field("notes"), Materials: materials, Discord: discord}
+	d, why := aiLinkedIn(in)
 	if why != "" {
 		followup(ctx, why)
 		return
@@ -316,16 +317,68 @@ func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 	} else {
 		source += "; no slides or repo found (link them with **Link slides** and run it again)"
 	}
-	text := fmt.Sprintf("**LinkedIn recap for %s, written by Claude** (%s). Check every detail, then post it from the page by hand."+
-		"\n**Page post**\n```\n%s\n```", e.Name, source, d.Page)
+	r := &recap{card: k, event: e, source: source, materials: materials, draft: d, thread: aidraft.LinkedInThread(in, d)}
+	ctx.Followup(botkit.Reply{Content: r.text(), Components: r.buttons(), Ephemeral: true})
+}
+
+// recap is a LinkedIn recap on screen, which an officer can ask Claude to revise.
+type recap struct {
+	card      *card
+	event     eventtext.Event
+	source    string
+	materials string
+
+	mu     sync.Mutex
+	draft  aidraft.LinkedInDraft
+	thread *aidraft.Thread
+}
+
+func (r *recap) text() string {
+	r.mu.Lock()
+	d, asked := r.draft, r.thread.Feedback
+	r.mu.Unlock()
+	text := fmt.Sprintf("**LinkedIn recap for %s, written by Claude** (%s). Check every detail, then post it from the page by hand.%s"+
+		"\n**Page post**\n```\n%s\n```", r.event.Name, r.source, revisionNote(asked), d.Page)
 	if d.Presenter != "" {
 		text += fmt.Sprintf("\n**For the presenter's own profile** (the page reshares it)\n```\n%s\n```", d.Presenter)
 	}
 	if d.Tag != "" {
 		text += "\n**Tag:** " + d.Tag
 	}
-	text += "\nOnce it's up, mark the recap step:"
-	ctx.Followup(botkit.Reply{Content: botkit.Cut(text, discordMessageLimit), Components: k.markButtons("recap"), Ephemeral: true})
+	text += "\nNot right? **Revise with AI** and say what to change. Once it's up, mark the recap step:"
+	return botkit.Cut(text, discordMessageLimit)
+}
+
+func (r *recap) buttons() []discordgo.MessageComponent {
+	v := r.card.cog.bot.NewOfficerView()
+	revise := v.Button("Revise with AI", discordgo.PrimaryButton, func(ctx *botkit.Ctx) {
+		ctx.Modal(v.Modal("Revise the LinkedIn recap", []botkit.TextInput{feedbackInput}, r.revise))
+	})
+	return append(botkit.Rows(revise), r.card.markButtons("recap")...)
+}
+
+// revise rewrites both posts with the officer's feedback, in the same
+// conversation, and shows them in place of the last ones.
+func (r *recap) revise(ctx *botkit.Ctx) {
+	ctx.DeferUpdate()
+	r.mu.Lock()
+	t := r.thread
+	r.mu.Unlock()
+	next, why := aiRevise(t, strings.TrimSpace(ctx.Field("feedback")))
+	var d aidraft.LinkedInDraft
+	if why == "" {
+		d, why = aidraft.LinkedInFrom(next, r.materials)
+	}
+	if why != "" {
+		followup(ctx, why)
+		return
+	}
+	r.mu.Lock()
+	r.draft, r.thread = d, next
+	r.mu.Unlock()
+	log.Printf("LinkedIn recap for %s revised for %s (revision %d)", r.event.Name, who(ctx), len(next.Feedback))
+	content, components := r.text(), r.buttons()
+	ctx.Original().Edit(botkit.Edit{Content: &content, Components: &components})
 }
 
 var linkPattern = regexp.MustCompile(`https?://[^\s<>()\[\]"']+`)

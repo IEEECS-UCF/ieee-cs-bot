@@ -129,3 +129,34 @@ func TestLinkedInRecapIsOnTheCardMenu(t *testing.T) {
 	}
 	t.Error("no LinkedIn recap in the card's menu")
 }
+
+func TestALinkedInRecapCanBeRevisedWithFeedback(t *testing.T) {
+	tc := newTestCog(t)
+	e := event(gid("g1"), days(-2))
+	k := cardFor(tc, e)
+	seen := fakeRevise(t, "=== PAGE POST ===\nShorter recap.\n=== PRESENTER POST ===\nI ran it.\n=== TAG ===\nnone",
+		"Sure! Here you go.")
+	in := aidraft.LinkedInInput{Event: e, Materials: "https://github.com/IEEECS-UCF/Bash"}
+	d := aidraft.LinkedInDraft{Page: "Long recap.", Presenter: "I ran an intro to Bash."}
+	r := &recap{card: k, event: e, source: "read 0 Discord message(s) about it", materials: in.Materials, draft: d,
+		thread: aidraft.LinkedInThread(in, d)}
+	if !strings.Contains(r.text(), "Revise with AI") || !strings.Contains(labels(r.buttons()), "Revise with AI, Done") {
+		t.Fatalf("text %q buttons %s", r.text(), labels(r.buttons()))
+	}
+	ctx := submit(tc.bot, author, map[string]string{"feedback": "half as long"})
+	r.revise(ctx)
+	if (*seen)[0].Draft() != d.Format() {
+		t.Errorf("revised from %q", (*seen)[0].Draft())
+	}
+	shown := tc.f.find("PATCH", `/webhooks/app/`+ctx.I.Token+`/messages/@original`)
+	if len(shown) != 1 || !strings.Contains(shown[0].content(), "Shorter recap.\n\nSlides and code: github.com/IEEECS-UCF/Bash") ||
+		!strings.Contains(shown[0].content(), `Revision 1. You asked: "half as long"`) {
+		t.Fatalf("shown %v", contents(shown))
+	}
+	// A reply out of format keeps the last good recap
+	ctx = submit(tc.bot, author, map[string]string{"feedback": "again"})
+	r.revise(ctx)
+	if !strings.Contains(tc.f.lastSaid(ctx), "expected shape") || r.draft.Page != "Shorter recap.\n\nSlides and code: github.com/IEEECS-UCF/Bash" {
+		t.Errorf("said %q, page %q", tc.f.lastSaid(ctx), r.draft.Page)
+	}
+}

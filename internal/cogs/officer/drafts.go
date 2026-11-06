@@ -25,10 +25,11 @@ type draftBase struct {
 	view       *botkit.View
 	components []discordgo.MessageComponent
 
-	mu   sync.Mutex
-	text string // the draft
-	sent bool
-	ai   bool
+	mu     sync.Mutex
+	text   string // the draft
+	sent   bool
+	ai     bool
+	thread *aidraft.Thread // the conversation behind the latest revision, if any
 }
 
 // claim marks the draft sent; false if it already was (set before any
@@ -63,8 +64,18 @@ func (d *draftBase) current() (string, bool) {
 
 func (d *draftBase) setDraft(text string) {
 	d.mu.Lock()
-	d.text, d.ai = text, true
+	d.text, d.ai, d.thread = text, true, nil
 	d.mu.Unlock()
+}
+
+// revisions is what officers have asked Claude to change, oldest first.
+func (d *draftBase) revisions() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.thread == nil {
+		return nil
+	}
+	return d.thread.Feedback
 }
 
 // aiFor is whether text is the "Draft with AI" draft, unchanged.
@@ -78,6 +89,8 @@ type poster interface {
 	sendOnce(ctx *botkit.Ctx, text string) string
 	sendEmergency(ctx *botkit.Ctx, text, reason string) (string, string)
 	withAI(ctx *botkit.Ctx)
+	ask() string     // what the draft is written from, for Claude
+	preview() string // the draft as shown to the officer
 }
 
 func draftButtons(p poster) []discordgo.MessageComponent {
@@ -93,6 +106,7 @@ func draftButtons(p poster) []discordgo.MessageComponent {
 			ctx.Modal(draftEdit(p))
 		}),
 		v.Button("Draft with AI", discordgo.SecondaryButton, func(ctx *botkit.Ctx) { draftWithAI(p, ctx) }),
+		v.Button("Revise with AI", discordgo.SecondaryButton, func(ctx *botkit.Ctx) { openRevise(p, ctx) }),
 		botkit.NewRow,
 		v.Button("Emergency post", discordgo.DangerButton, func(ctx *botkit.Ctx) { openEmergency(p, ctx) }),
 	)
@@ -125,6 +139,70 @@ func draftWithAI(p poster, ctx *botkit.Ctx) {
 	}
 	ctx.DeferUpdate()
 	p.withAI(ctx)
+}
+
+// ---------- revising with feedback ----------
+
+// feedbackInput is the modal field for what to change.
+var feedbackInput = botkit.TextInput{ID: "feedback", Label: "What should change?", Paragraph: true, MinLength: 2, MaxLength: 1000,
+	Placeholder: "e.g. shorter, say it's beginner friendly, drop the second emoji"}
+
+func openRevise(p poster, ctx *botkit.Ctx) {
+	d := p.base()
+	if d.isSent() {
+		ctx.Ephemeral("Already sent for review.")
+		return
+	}
+	if !aiConfigured() {
+		ctx.Ephemeral("AI drafting isn't set up (no ANTHROPIC_API_KEY).")
+		return
+	}
+	ctx.Modal(d.view.Modal("Revise with AI", []botkit.TextInput{feedbackInput}, func(ctx *botkit.Ctx) { revise(p, ctx) }))
+}
+
+// revise has Claude rewrite the draft with the officer's feedback, in the same
+// conversation as the earlier drafts (or, for a typed draft, starting from it).
+func revise(p poster, ctx *botkit.Ctx) {
+	d := p.base()
+	if d.isSent() {
+		ctx.Ephemeral("Already sent for review.")
+		return
+	}
+	ctx.DeferUpdate()
+	ask := p.ask() // before locking: ask locks too
+	d.mu.Lock()
+	t := d.thread
+	if t == nil {
+		t = aidraft.AnnouncementThread(ask, aidraft.ExamplePosts(), d.text)
+	}
+	d.mu.Unlock()
+	feedback := strings.TrimSpace(ctx.Field("feedback"))
+	next, why := aiRevise(t, feedback)
+	text := ""
+	if next != nil {
+		text = next.Draft()
+	}
+	if n := len([]rune(text)); why == "" && n > eventtext.MaxPost {
+		why = fmt.Sprintf("Claude's revision came out at %d characters, over Discord's %d. Ask for a shorter one, or edit it yourself.", n, eventtext.MaxPost)
+	}
+	if why != "" {
+		followup(ctx, why)
+		return
+	}
+	d.mu.Lock()
+	d.text, d.ai, d.thread = text, true, next
+	d.mu.Unlock()
+	log.Printf("Announcement draft revised for %s (revision %d)", who(ctx), len(next.Feedback))
+	content := p.preview()
+	ctx.Original().Edit(botkit.Edit{Content: &content, Components: &d.components})
+}
+
+// revisionNote is the line under a draft's heading saying what was asked for.
+func revisionNote(asked []string) string {
+	if len(asked) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nRevision %d. You asked: \"%s\"", len(asked), botkit.Cut(asked[len(asked)-1], 300))
 }
 
 func draftEdit(p poster) *botkit.Modal {
@@ -224,9 +302,22 @@ func (d *eventDraft) withAI(ctx *botkit.Ctx) {
 	}
 	d.setDraft(text)
 	log.Printf("AI draft for %s written for %s", d.event.Name, who(ctx))
-	content := botkit.Cut(fmt.Sprintf("**#announcements draft, written by Claude** (check every detail; another officer has to "+
-		"approve it before it posts)\n```md\n%s\n```", text), discordMessageLimit)
+	content := d.preview()
 	ctx.Original().Edit(botkit.Edit{Content: &content, Components: &d.components})
+}
+
+func (d *eventDraft) ask() string {
+	return aidraft.Details(d.event, eventtext.PlainDescription(d.event), d.discordLink, d.opener)
+}
+
+func (d *eventDraft) preview() string {
+	text, ai := d.current()
+	who := "draft"
+	if ai {
+		who = "draft, written by Claude"
+	}
+	return botkit.Cut(fmt.Sprintf("**#announcements %s** (check every detail; another officer has to "+
+		"approve it before it posts)%s\n```md\n%s\n```", who, revisionNote(d.revisions()), text), discordMessageLimit)
 }
 
 // ---------- emergency posts (skip review, with a reason on record) ----------
@@ -326,8 +417,19 @@ func (g *generalDraft) preview() string {
 	if g.image != nil {
 		pic = "\nImage: " + g.image.Filename
 	}
-	return botkit.Cut(fmt.Sprintf("**#announcements %s** (another officer has to approve it before it posts)\n```md\n%s\n```%s",
-		who, text, pic), discordMessageLimit)
+	return botkit.Cut(fmt.Sprintf("**#announcements %s** (another officer has to approve it before it posts)%s\n```md\n%s\n```%s",
+		who, revisionNote(g.revisions()), text, pic), discordMessageLimit)
+}
+
+// ask is the officer's notes (what they typed first, if Claude never drafted it).
+func (g *generalDraft) ask() string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	notes := g.notes
+	if notes == "" {
+		notes = g.text
+	}
+	return aidraft.FromNotes(notes)
 }
 
 func (g *generalDraft) sendOnce(ctx *botkit.Ctx, text string) string {
@@ -372,7 +474,7 @@ func (g *generalDraft) withAI(ctx *botkit.Ctx) {
 		return
 	}
 	g.mu.Lock()
-	g.notes, g.text, g.ai = notes, text, true
+	g.notes, g.text, g.ai, g.thread = notes, text, true, nil
 	g.mu.Unlock()
 	log.Printf("AI general announcement written for %s", who(ctx))
 	content := g.preview()

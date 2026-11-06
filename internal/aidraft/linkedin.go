@@ -145,16 +145,45 @@ func ParseLinkedIn(reply string) (LinkedInDraft, bool) {
 	return d, d.Page != ""
 }
 
-// DraftLinkedIn writes the page post and the presenter post for an event: (draft, "")
-// or (empty, why it failed).
-func DraftLinkedIn(ctx context.Context, in LinkedInInput) (LinkedInDraft, string) {
+const linkedinLimit = 6000
+
+func linkedinRequest(in LinkedInInput) []anthropic.BetaContentBlockParamUnion {
 	page, presenter := LinkedInExamples()
-	content := []anthropic.BetaContentBlockParamUnion{
+	return []anthropic.BetaContentBlockParamUnion{
 		{OfText: &anthropic.BetaTextBlockParam{Text: LinkedInExamplesText(page, presenter),
 			CacheControl: anthropic.NewBetaCacheControlEphemeralParam()}},
 		{OfText: &anthropic.BetaTextBlockParam{Text: LinkedInDetails(in)}},
 	}
-	reply, why := write(ctx, LinkedInSystem, content, 6000)
+}
+
+// Format is the draft in the reply format Claude uses, for a revision thread.
+func (d LinkedInDraft) Format() string {
+	tag := d.Tag
+	if tag == "" {
+		tag = "none"
+	}
+	return "=== PAGE POST ===\n" + d.Page + "\n=== PRESENTER POST ===\n" + d.Presenter + "\n=== TAG ===\n" + tag
+}
+
+// LinkedInThread is a recap and what it was written from, to revise it.
+func LinkedInThread(in LinkedInInput, d LinkedInDraft) *Thread {
+	return newThread(LinkedInSystem, linkedinLimit, linkedinRequest(in), d.Format())
+}
+
+// LinkedInFrom reads a revised recap out of its thread: (draft, "") or why not.
+func LinkedInFrom(t *Thread, materials string) (LinkedInDraft, string) {
+	d, ok := ParseLinkedIn(t.Draft())
+	if !ok {
+		return LinkedInDraft{}, "Claude's reply wasn't in the expected shape. Try again."
+	}
+	d.Page = WithLink(d.Page, materials)
+	return d, ""
+}
+
+// DraftLinkedIn writes the page post and the presenter post for an event: (draft, "")
+// or (empty, why it failed).
+func DraftLinkedIn(ctx context.Context, in LinkedInInput) (LinkedInDraft, string) {
+	reply, why := write(ctx, LinkedInSystem, linkedinRequest(in), linkedinLimit)
 	if why != "" {
 		return LinkedInDraft{}, why
 	}

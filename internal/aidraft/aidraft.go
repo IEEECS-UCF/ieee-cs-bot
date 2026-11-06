@@ -119,6 +119,11 @@ func Write(ctx context.Context, content []anthropic.BetaContentBlockParamUnion) 
 // write asks Claude with the given instructions: (text, "") or ("", why it
 // failed). The text is cut to limit characters.
 func write(ctx context.Context, system string, content []anthropic.BetaContentBlockParamUnion, limit int) (string, string) {
+	return send(ctx, system, []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(content...)}, limit)
+}
+
+// send is write with a whole conversation (for revisions).
+func send(ctx context.Context, system string, messages []anthropic.BetaMessageParam, limit int) (string, string) {
 	client := anthropic.NewClient()
 	response, err := client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 		Model:        Model,
@@ -127,7 +132,7 @@ func write(ctx context.Context, system string, content []anthropic.BetaContentBl
 		Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
 		Fallbacks:    anthropic.BetaFallbacksParamOfDefault(),
 		System:       []anthropic.BetaTextBlockParam{{Text: system}},
-		Messages:     []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(content...)},
+		Messages:     messages,
 	})
 	if err != nil {
 		return "", APIErrorText(err)
