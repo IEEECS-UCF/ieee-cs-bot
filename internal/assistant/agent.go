@@ -458,10 +458,31 @@ func (a *Ask) search(query string, f Filter, limit int) (string, error) {
 		if author == "" {
 			author = "-"
 		}
-		parts = append(parts, fmt.Sprintf("[%s] %s · %s · %s\n%s\n%s", h.Source, h.Place, author, LocalDay(h.TS),
-			h.URL, botkit.Cut(h.Text, 1200)))
+		part := fmt.Sprintf("[%s] %s · %s · %s\n%s\n%s", h.Source, h.Place, author, LocalDay(h.TS),
+			h.URL, h.Excerpt(ExcerptChars))
+		if h.More > 0 {
+			part += "\n" + moreParts(h)
+		}
+		parts = append(parts, part)
 	}
 	return strings.Join(parts, "\n\n"), nil
+}
+
+// ExcerptChars is how much of each result search shows: all of a document
+// part or conversation (both at most 1,500), or the best-matching stretch of
+// a longer message. (It was the first 1,200, which cut off the end of a
+// conversation, often the reply that answers it.)
+const ExcerptChars = 1500
+
+// moreParts says that more of a document matched, and how to read it all.
+func moreParts(h Hit) string {
+	doc := DocumentOf(h.Key)
+	source, id, _ := strings.Cut(doc, ":")
+	read := "read_drive_file with file_id"
+	if source == "notion" {
+		read = "read_notion_page with page_id"
+	}
+	return fmt.Sprintf("(at least %d more parts of this document match; %s %s reads all of it)", h.More, read, id)
 }
 
 var messageLink = regexp.MustCompile(`channels/\d+/(\d+)/(\d+)`)

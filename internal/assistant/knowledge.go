@@ -54,6 +54,10 @@ type Hit struct {
 	TS     string `json:"ts"`
 	URL    string `json:"url"`
 	Text   string `json:"text"`
+	// More is how many other parts of the same document also matched but
+	// were left out (see PerDocument).
+	More  int   `json:"-"`
+	marks []int // where the query's words are in Text, in runes
 }
 
 type Knowledge struct {
@@ -306,12 +310,48 @@ func LocalDay(ts string) string {
 	return botkit.Cut(ts, 10)
 }
 
+// PerDocument is how many parts of one Drive or Notion document a search
+// returns. A long document matches in many places, and without a cap its
+// near-identical parts took every result (and Claude can read it in full).
+const PerDocument = 2
+
+// DocumentOf is the document a Drive or Notion part belongs to
+// ("drive:<file id>"), or "" for anything else.
+func DocumentOf(key string) string {
+	if !strings.HasPrefix(key, "drive:") && !strings.HasPrefix(key, "notion:") {
+		return ""
+	}
+	if i := strings.LastIndexByte(key, ':'); i > strings.IndexByte(key, ':') {
+		return key[:i]
+	}
+	return ""
+}
+
+// Highlight marks around matched words: control characters that chat and documents don't have.
+const markOpen, markClose = "\x01", "\x02"
+
+// unmark strips highlight marks, returning where each marked word starts.
+func unmark(marked string) []int {
+	var at []int
+	n := 0
+	for _, r := range marked {
+		switch string(r) {
+		case markOpen:
+			at = append(at, n)
+		case markClose:
+		default:
+			n++
+		}
+	}
+	return at
+}
+
 func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error) {
 	match := FTSQuery(query)
 	if match == "" {
 		return nil, nil
 	}
-	q := "SELECT key, source, place, author, ts, url, text FROM docs WHERE docs MATCH ?"
+	q := "SELECT key, source, place, author, ts, url, text, highlight(docs, 6, char(1), char(2)) FROM docs WHERE docs MATCH ?"
 	args := []any{match}
 	for _, s := range Sources {
 		if f.Source == s {
@@ -338,7 +378,8 @@ func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error)
 	} else {
 		q += " ORDER BY " + relevance + " LIMIT ?"
 	}
-	args = append(args, limit*2)
+	// Room for the messages and document parts left out below
+	args = append(args, limit*3+10)
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	rows, err := k.db.Query(q, args...)
@@ -348,10 +389,12 @@ func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error)
 	var hits []Hit
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.Key, &h.Source, &h.Place, &h.Author, &h.TS, &h.URL, &h.Text); err != nil {
+		var marked string
+		if err := rows.Scan(&h.Key, &h.Source, &h.Place, &h.Author, &h.TS, &h.URL, &h.Text, &marked); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		h.marks = unmark(marked)
 		hits = append(hits, h)
 	}
 	rows.Close()
@@ -365,6 +408,8 @@ func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error)
 		}
 	}
 	var out []Hit
+	shown := map[string]int{} // document: index in out of its first part
+	perDoc := map[string]int{}
 	for _, h := range hits {
 		if strings.HasPrefix(h.Key, "discord:") && len(convs) > 0 {
 			var conv string
@@ -372,11 +417,54 @@ func (k *Knowledge) SearchWith(query string, f Filter, limit int) ([]Hit, error)
 				continue
 			}
 		}
+		if doc := DocumentOf(h.Key); doc != "" {
+			if perDoc[doc]++; perDoc[doc] > PerDocument {
+				if i, ok := shown[doc]; ok {
+					out[i].More++
+				}
+				continue
+			}
+			if _, ok := shown[doc]; !ok && len(out) < limit {
+				shown[doc] = len(out)
+			}
+		}
 		if len(out) < limit {
 			out = append(out, h)
 		}
 	}
 	return out, nil
+}
+
+// Excerpt is the entry's text, or for one longer than n runes, the n-rune
+// stretch with the most matched words, so the match isn't cut off.
+func (h Hit) Excerpt(n int) string {
+	r := []rune(h.Text)
+	if len(r) <= n {
+		return h.Text
+	}
+	start, best := 0, -1
+	lead := n / 5 // some text before the first match
+	for _, m := range h.marks {
+		s := max(0, min(m-lead, len(r)-n))
+		count := 0
+		for _, o := range h.marks {
+			if o >= s && o < s+n {
+				count++
+			}
+		}
+		if count > best {
+			start, best = s, count
+		}
+	}
+	end := start + n
+	text := strings.TrimSpace(string(r[start:end]))
+	if start > 0 {
+		text = "…" + text
+	}
+	if end < len(r) {
+		text += "…"
+	}
+	return text
 }
 
 // Counts is the number of entries per source.
@@ -414,11 +502,27 @@ func init() {
 
 // FTSQuery is plain words OR'd together, so punctuation can't break FTS5's
 // query syntax; bm25 ranks entries matching more (and rarer) words first.
+// Words next to each other in the query are also searched as a phrase, so
+// "bare metal" ranks text saying "bare metal" above text with "bare" and
+// "metal" apart.
 func FTSQuery(text string) string {
 	seen := map[string]bool{}
-	var quoted, filler []string
+	var quoted, filler, phrases []string
+	prev := ""
 	for _, w := range word.FindAllString(strings.ToLower(text), -1) {
-		if len([]rune(w)) <= 1 || seen[w] {
+		if len([]rune(w)) <= 1 {
+			continue
+		}
+		if stopwords[w] {
+			prev = ""
+		} else {
+			if prev != "" && !seen[prev+" "+w] {
+				seen[prev+" "+w] = true
+				phrases = append(phrases, `"`+prev+" "+w+`"`)
+			}
+			prev = w
+		}
+		if seen[w] {
 			continue
 		}
 		seen[w] = true
@@ -431,10 +535,13 @@ func FTSQuery(text string) string {
 	if len(quoted) == 0 { // only filler words: search for those
 		quoted = filler
 	}
-	return strings.Join(quoted, " OR ")
+	return strings.Join(append(quoted, phrases...), " OR ")
 }
 
-// Chunks splits text into overlapping pieces of size characters.
+// Chunks splits text into overlapping pieces of at most size characters.
+// Pieces end at a paragraph, line, sentence or word break near size when
+// there's one, and start at a word, so a sheet's rows and a doc's sentences
+// stay whole and search results don't open mid-word.
 func Chunks(text string, size, overlap int) []string {
 	r := []rune(strings.TrimSpace(text))
 	if len(r) <= size {
@@ -444,11 +551,57 @@ func Chunks(text string, size, overlap int) []string {
 		return []string{string(r)}
 	}
 	var out []string
-	for start := 0; start < len(r); start += size - overlap {
+	for start := 0; ; {
 		end := min(start+size, len(r))
-		out = append(out, string(r[start:end]))
+		if end < len(r) {
+			end = breakBefore(r, start+size*2/3, end)
+		}
+		out = append(out, strings.TrimSpace(string(r[start:end])))
+		if end == len(r) {
+			return out
+		}
+		// The next piece starts up to overlap back, at the first line start
+		// there, else the first word
+		start = startAfter(r, max(end-overlap, start+1), end)
 	}
-	return out
+}
+
+// startAfter is where to start a piece in r[lo:hi]: the first line start,
+// else sentence start, else word start, else lo.
+func startAfter(r []rune, lo, hi int) int {
+	for _, begins := range []func(i int) bool{
+		func(i int) bool { return r[i-1] == '\n' },
+		func(i int) bool { return isSpace(r[i-1]) && i >= 2 && strings.ContainsRune(".!?", r[i-2]) },
+		func(i int) bool { return isSpace(r[i-1]) },
+	} {
+		for i := lo; i < hi; i++ {
+			if begins(i) && !isSpace(r[i]) {
+				return i
+			}
+		}
+	}
+	return lo
+}
+
+func isSpace(c rune) bool { return c == ' ' || c == '\n' || c == '\t' || c == '\r' }
+
+// breakBefore is the best place to end a piece in r[lo:hi]: after the last
+// blank line, else the last line end, else the last sentence end, else the
+// last space. hi if there's none.
+func breakBefore(r []rune, lo, hi int) int {
+	for _, after := range []func(i int) bool{
+		func(i int) bool { return r[i-1] == '\n' && i >= 2 && r[i-2] == '\n' },
+		func(i int) bool { return r[i-1] == '\n' },
+		func(i int) bool { return isSpace(r[i-1]) && i >= 2 && strings.ContainsRune(".!?", r[i-2]) },
+		func(i int) bool { return isSpace(r[i-1]) },
+	} {
+		for i := hi; i > lo; i-- {
+			if after(i) {
+				return i
+			}
+		}
+	}
+	return hi
 }
 
 // MetaWithPrefix returns the meta values whose keys start with prefix, keyed
