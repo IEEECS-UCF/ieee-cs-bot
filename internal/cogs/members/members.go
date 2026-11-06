@@ -109,6 +109,7 @@ type Cog struct {
 	addRole       func(guildID string, userID, roleID int64, reason string) error
 	reviewChannel func() string
 	postCard      func(channelID string, embed *discordgo.MessageEmbed, view []discordgo.MessageComponent) (*discordgo.Message, error)
+	editCard      func(card *members.Card, embed *discordgo.MessageEmbed) error
 
 	mu     sync.Mutex
 	chunks map[string]*chunkCount // guild -> member chunks seen at startup
@@ -144,6 +145,12 @@ func newCog(b *botkit.Bot) *Cog {
 	c.postCard = func(channelID string, embed *discordgo.MessageEmbed, view []discordgo.MessageComponent) (*discordgo.Message, error) {
 		return b.S.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 			Embeds: []*discordgo.MessageEmbed{embed}, Components: view, AllowedMentions: botkit.NoMentions()})
+	}
+	c.editCard = func(card *members.Card, embed *discordgo.MessageEmbed) error {
+		embeds := []*discordgo.MessageEmbed{embed}
+		_, err := b.S.ChannelMessageEditComplex(&discordgo.MessageEdit{
+			Channel: botkit.S(card.Channel), ID: botkit.S(card.Message), Embeds: &embeds})
+		return err
 	}
 	return c
 }
@@ -225,10 +232,19 @@ func (c *Cog) onReview(ix interaction, action string, userID int64) {
 
 // ---------- verify form ----------
 
-func (c *Cog) verifyModal() *botkit.Modal {
-	return c.b.NewModal("Verify your IEEE membership", []botkit.TextInput{
-		{ID: "number", Label: "IEEE member number", Placeholder: "8 digits, on your IEEE account page", MinLength: 1, MaxLength: 12},
-		{ID: "email", Label: "Email on your IEEE account (optional)", Optional: true, MaxLength: 120},
+// verifyModal is the form; with a pending request it's filled in with what
+// they sent, so they can fix a typo.
+func (c *Cog) verifyModal(pending *members.Record) *botkit.Modal {
+	title, number, email := "Verify your IEEE membership", "", ""
+	if pending != nil {
+		title, email = "Fix your membership request", pending.Email
+		if pending.Number != nil {
+			number = *pending.Number
+		}
+	}
+	return c.b.NewModal(title, []botkit.TextInput{
+		{ID: "number", Label: "IEEE member number", Placeholder: "8 digits, on your IEEE account page", Value: number, MinLength: 1, MaxLength: 12},
+		{ID: "email", Label: "Email on your IEEE account (optional)", Value: email, Optional: true, MaxLength: 120},
 	}, func(ctx *botkit.Ctx) { c.onVerify(live{ctx}) })
 }
 
@@ -239,7 +255,22 @@ func (c *Cog) onVerify(ix interaction) {
 		return
 	}
 	userID := botkit.ID(ix.User().ID)
+	before := members.Get(userID)
+	if before != nil && before.Status == "verified" && before.Year == members.Now().Year() {
+		// An officer approved it while the form was open
+		ix.Ephemeral(fmt.Sprintf("You're already verified for %d. ✅", before.Year))
+		return
+	}
 	record := members.Submit(userID, number, strings.TrimSpace(ix.Field("email")))
+	if before != nil && before.Status == "pending" && before.Card != nil {
+		// A fix to a request still waiting: update its card instead of posting a second one
+		record.Card = before.Card
+		members.SaveRecord(userID, record)
+		if err := c.editCard(before.Card, reviewEmbed(userID, record)); err == nil {
+			ix.Ephemeral("Updated. The officers' review card now shows your new details; `/member status` shows where it stands.")
+			return
+		}
+	}
 	ix.Ephemeral("Thanks! An officer will check it with IEEE. You'll get the **Dues Paying** role once it's verified; " +
 		"`/member status` shows where it stands.")
 	channelID := c.reviewChannel()
@@ -270,15 +301,15 @@ func (c *Cog) verify(ix interaction) {
 	}
 	record := members.Get(userID)
 	year := members.Now().Year()
-	if record != nil && record.Status == "pending" {
-		ix.Ephemeral("Your request is already waiting for an officer. 🙂")
-		return
-	}
 	if record != nil && record.Status == "verified" && record.Year == year {
 		ix.Ephemeral(fmt.Sprintf("You're already verified for %d. ✅", year))
 		return
 	}
-	ix.Modal(c.verifyModal())
+	if record != nil && record.Status == "pending" {
+		ix.Modal(c.verifyModal(record))
+		return
+	}
+	ix.Modal(c.verifyModal(nil))
 }
 
 func (c *Cog) status(ix interaction) {
@@ -293,7 +324,7 @@ func (c *Cog) status(ix interaction) {
 	case record == nil:
 		text = "You haven't asked yet. Use `/member verify`."
 	case record.Status == "pending":
-		text = fmt.Sprintf("Waiting for an officer (submitted %s).", record.Submitted)
+		text = fmt.Sprintf("Waiting for an officer (submitted %s). Made a typo? `/member verify` lets you fix it.", record.Submitted)
 	case record.Status == "verified" && record.Year == year:
 		text = fmt.Sprintf("✅ Verified for %d.", record.Year)
 	case record.Status == "verified":

@@ -297,9 +297,48 @@ func TestVerifyFormPostsAReviewCard(t *testing.T) {
 	if r.Card == nil || r.Card.Channel != 5 || r.Card.Message != 6 {
 		t.Errorf("%+v", r.Card)
 	}
+
+	// A typo can be fixed while it waits: the form comes back filled in, and
+	// the same card is updated instead of a second one being posted
 	again := interactionWith().as("70")
 	c.verify(again)
-	if again.sent != "Your request is already waiting for an officer. 🙂" || again.modal != nil {
-		t.Errorf("%q", again.sent)
+	if again.modal == nil || again.modal.Title != "Fix your membership request" ||
+		again.modal.Inputs[0].Value != "01234567" || again.modal.Inputs[1].Value != "a@b.c" {
+		t.Fatalf("%q %+v", again.sent, again.modal)
+	}
+	var edited []string
+	c.editCard = func(card *members.Card, e *discordgo.MessageEmbed) error {
+		edited = append(edited, e.Fields[0].Value)
+		return nil
+	}
+	again.fields["number"] = "1234568"
+	c.onVerify(again)
+	r = members.Get(70)
+	if r.NumberText() != "01234568" || r.Status != "pending" || r.Card == nil || r.Card.Message != 6 {
+		t.Errorf("%+v", r)
+	}
+	if len(fake.cards) != 1 || len(edited) != 1 || edited[0] != "`01234568`" || !strings.HasPrefix(again.sent, "Updated.") {
+		t.Errorf("cards %v, edited %v, said %q", fake.cards, edited, again.sent)
+	}
+
+	// If the card is gone, a new one is posted
+	c.editCard = func(*members.Card, *discordgo.MessageEmbed) error { return errors.New("404 Not Found") }
+	c.onVerify(again)
+	if len(fake.cards) != 2 || !strings.HasPrefix(again.sent, "Thanks!") {
+		t.Errorf("cards %v, said %q", fake.cards, again.sent)
+	}
+}
+
+// An officer approving while the form is open isn't undone by submitting it
+func TestSubmittingAfterApprovalChangesNothing(t *testing.T) {
+	c, fake := testCog(t)
+	members.Submit(70, "01234567", "")
+	members.Decide(70, "verified", 99, "")
+	ix := interactionWith().as("70")
+	ix.fields["number"] = "1234568"
+	c.onVerify(ix)
+	if r := members.Get(70); r.Status != "verified" || r.NumberText() != "01234567" || len(fake.cards) != 0 ||
+		!strings.HasPrefix(ix.sent, "You're already verified") {
+		t.Errorf("%+v %q", r, ix.sent)
 	}
 }
