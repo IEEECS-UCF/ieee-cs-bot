@@ -14,6 +14,7 @@ import (
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/assistant"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/calendarsync"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/events"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/general"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/jobfeed"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/members"
@@ -32,6 +33,7 @@ var cogs = []func(*botkit.Bot){
 	members.Setup,
 	jobfeed.Setup,
 	general.Setup,
+	events.Setup,
 	assistant.Setup,
 	officer.Setup,
 }

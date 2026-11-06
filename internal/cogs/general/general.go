@@ -35,6 +35,10 @@ func InfoEmbed() *discordgo.MessageEmbed {
 	embed := botkit.BaseEmbed("About IEEE CS at UCF", aboutText, botkit.IEEEGold)
 	botkit.AddField(embed, "Fields of Interest",
 		"Systems Programming, Comp Arch, GPU Programming, Embedded Systems, OS, Drivers, Computation, Discrete Mathematics.", false)
+	botkit.AddField(embed, "Commands",
+		"`/events` what's coming up, and slides and code from recent workshops\n"+
+			"`/member verify` get the Dues Paying role if you're an IEEE member\n"+
+			"`/socials` our website and social media", false)
 	return embed
 }
 

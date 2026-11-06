@@ -9,6 +9,7 @@ import (
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/officer"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/testutil"
 )
 
@@ -44,7 +45,7 @@ func TestCogsSetUpWithTheSameCommands(t *testing.T) {
 		}
 	}
 	sort.Strings(names)
-	want := []string{"info", "member status", "member verify", "officer announce", "officer ask", "officer chapter",
+	want := []string{"events", "info", "member status", "member verify", "officer announce", "officer ask", "officer chapter",
 		"officer event", "officer events", "socials"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("commands %v, want %v", names, want)
@@ -61,6 +62,9 @@ func TestCogsSetUpWithTheSameCommands(t *testing.T) {
 	}
 	if _, ok := b.Cog(cogapi.OfficerName).(cogapi.Officer); !ok {
 		t.Error("officer cog doesn't implement cogapi.Officer")
+	}
+	if _, ok := b.Cog(cogapi.OfficerName).(interface{ Cache() *officer.SnapshotCache }); !ok {
+		t.Error("officer cog has no snapshot cache for /events")
 	}
 	if _, ok := b.Cog(cogapi.CalendarSyncName).(cogapi.CalendarSync); !ok {
 		t.Error("calendar sync cog doesn't implement cogapi.CalendarSync")

@@ -3,7 +3,7 @@
 The chapter's Discord bot, written in Go. It mirrors Google Calendar to Discord
 events, keeps officers on top of each event (`/officer events`, `/officer event`,
 nudges, the digest, reviews for announcements and day-of reminders), runs the
-volunteer board, the job feed and `/member` verification, and answers
+volunteer board, the job feed, `/events` for members and `/member` verification, and answers
 `/officer ask` with Claude, from a knowledge cache of Discord, Google Drive and
 Notion.
 

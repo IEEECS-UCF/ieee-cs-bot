@@ -10,7 +10,6 @@ import (
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	off "github.com/IEEECS-UCF/ieee-cs-bot/internal/officer"
-	"github.com/IEEECS-UCF/ieee-cs-bot/internal/pytime"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/store"
 )
 
@@ -62,7 +61,7 @@ func (c *Cog) reviewWhen(gid, kind string) string {
 	if e == nil {
 		return ""
 	}
-	return fmt.Sprintf("%s at %d:00", pytime.Strftime(e.Start, "%a %b %-d"), off.ReminderHour())
+	return off.PostLabel(e.Start)
 }
 
 // approve someone else's post: an announcement posts now, a reminder at its time.

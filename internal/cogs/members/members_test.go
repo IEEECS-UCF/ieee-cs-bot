@@ -70,7 +70,7 @@ func testCog(t *testing.T) (*Cog, *fakeDiscord) {
 	}
 	fake := &fakeDiscord{}
 	c := newCog(b)
-	c.member = func(string, int64) *discordgo.Member { return fake.member }
+	c.member = func(string, int64) (*discordgo.Member, error) { return fake.member, nil }
 	c.addRole = func(_ string, _ int64, role int64, _ string) error {
 		fake.added = append(fake.added, role)
 		return nil
@@ -158,6 +158,20 @@ func TestApproveWhenTheRoleCantBeGiven(t *testing.T) {
 	c.onReview(ix, "approve", 10)
 	if ix.sent != "Couldn't give the role (403 Forbidden). Nothing was changed." || members.Get(10).Status != "pending" {
 		t.Errorf("%q", ix.sent)
+	}
+}
+
+// Discord failing to look the member up leaves the request pending, so an
+// officer can press Approve again.
+func TestApproveWhenDiscordCantLookThemUp(t *testing.T) {
+	c, fake := testCog(t)
+	members.Submit(10, "00000001", "", day)
+	c.member = func(string, int64) (*discordgo.Member, error) { return nil, errors.New("503 Service Unavailable") }
+	ix := interactionWith(officer)
+	c.onReview(ix, "approve", 10)
+	if !strings.HasPrefix(ix.sent, "Couldn't look them up on Discord (503 Service Unavailable)") ||
+		members.Get(10).Status != "pending" || len(fake.added) != 0 || ix.edited != nil {
+		t.Errorf("%q %s", ix.sent, members.Get(10).Status)
 	}
 }
 

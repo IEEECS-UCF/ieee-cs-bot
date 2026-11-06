@@ -108,6 +108,30 @@ func TestReminderLoopNeverPostsWithoutApproval(t *testing.T) {
 	if !c.SentIDs()[777] {
 		t.Error("sent not recorded")
 	}
+
+	// Moved to next week after its reminder went out: it's reviewed and reminded again for the new day
+	start = time.Date(2026, 11, 10, 18, 30, 0, 0, testutil.TZ)
+	e.Start, e.End = start, start.Add(2*time.Hour)
+	cache.Set(officer.NewSnapshot([]eventtext.Event{e}, nil, time.Now()))
+	at(day(9, 12, 0))
+	if reviews != 2 || c.SentIDs()[777] {
+		t.Fatalf("reviews %d, sent %v", reviews, c.SentIDs())
+	}
+	r = officer.GetReview("g1", "reminder")
+	r.Status, r.Approver = officer.Approved, &approver
+	officer.PutReview("g1", "reminder", r)
+	at(day(10, 9, 0))
+	if len(channel) != 2 || !c.SentIDs()[777] {
+		t.Errorf("channel %v", channel)
+	}
+	// A time change on the same day doesn't remind twice
+	start = start.Add(30 * time.Minute)
+	e.Start, e.End = start, start.Add(2*time.Hour)
+	cache.Set(officer.NewSnapshot([]eventtext.Event{e}, nil, time.Now()))
+	at(day(10, 12, 0))
+	if len(channel) != 2 || reviews != 2 {
+		t.Errorf("channel %v reviews %d", channel, reviews)
+	}
 }
 
 func TestUpcomingKeepsTheLastDay(t *testing.T) {
