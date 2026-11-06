@@ -595,3 +595,31 @@ func TestManyCalendarEventsGoneAtOnceAreLeftInDiscord(t *testing.T) {
 		t.Errorf("deleted %d, want 2", n)
 	}
 }
+
+func TestASyncThatChangesNothingDoesNotWriteTheStateFile(t *testing.T) {
+	f := setup(t)
+	for i := range 5 {
+		f.item(fmt.Sprintf("g%d", i), fmt.Sprintf("Event %d", i), i+1)
+	}
+	c := newCog(f, true)
+	runOnce(t, c, f)
+	runOnce(t, c, f)
+	before, err := os.Stat(StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runOnce(t, c, f)
+	after, _ := os.Stat(StateFile)
+	if !os.SameFile(before, after) {
+		t.Error("an idle sync rewrote the state file")
+	}
+	// A change is still saved
+	f.items["g2"].Summary = "Renamed"
+	runOnce(t, c, f)
+	if state := loadState(); state.Snapshots["g2"].Name != "Renamed" {
+		t.Errorf("rename not saved: %+v", state.Snapshots["g2"])
+	}
+	if got := c.EventMap(); len(got) != 5 {
+		t.Errorf("event map %v", got)
+	}
+}
