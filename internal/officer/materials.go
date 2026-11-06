@@ -16,6 +16,7 @@ type Materials struct {
 	Readme  string
 	PDF     []byte
 	PDFName string
+	Private bool // GitHub says the repo isn't there: it's private or gone, so a link to it is a 404
 }
 
 // MaxReadme and MaxPDF keep a recap request small (Claude reads PDFs up to
@@ -57,6 +58,10 @@ func FetchMaterials(link string) Materials {
 	status, _, body, err := httpGet(fmt.Sprintf("https://api.github.com/repos/%s/%s/contents", GitHubOrg(), repo),
 		map[string]string{"Accept": "application/vnd.github+json"}, 30*time.Second)
 	var files []repoFile
+	if err == nil && status == 404 {
+		m.Private = true
+		return m
+	}
 	if err != nil || status >= 400 || json.Unmarshal(body, &files) != nil {
 		return m
 	}

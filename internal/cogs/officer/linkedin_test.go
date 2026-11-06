@@ -198,3 +198,28 @@ func TestALinkedInRecapCanBeRevisedWithFeedback(t *testing.T) {
 		t.Errorf("said %q, page %q", tc.f.lastSaid(ctx), r.draft.Page)
 	}
 }
+
+// A private repo can't be read, and a link to it is a 404 for everyone on LinkedIn.
+func TestAPrivateRepoIsFlaggedAndNotLinked(t *testing.T) {
+	tc := newTestCog(t)
+	noDiscord(t)
+	e := event(gid("g1"), days(-2))
+	k := cardFor(tc, e)
+	tc.cache.Change(func(s *off.Snapshot) {
+		s.Slides["g1"] = &off.SlideMatch{Name: "Bash-Basics-Workshop", URL: "https://github.com/IEEECS-UCF/Bash-Basics-Workshop"}
+	})
+	swap(t, &fetchMaterials, func(string) off.Materials { return off.Materials{Repo: "Bash-Basics-Workshop", Private: true} })
+	var asked aidraft.LinkedInInput
+	swap(t, &aiLinkedIn, func(in aidraft.LinkedInInput) (aidraft.LinkedInDraft, string) {
+		asked = in
+		return aidraft.LinkedInDraft{Page: "We ran it.\n\nJoke."}, ""
+	})
+	ctx := press(tc.bot, author, "linkedin")
+	k.submitLinkedIn(ctx, e)
+	if asked.Materials != "" {
+		t.Errorf("linked a private repo: %q", asked.Materials)
+	}
+	if said := tc.f.lastSaid(ctx); !strings.Contains(said, "<https://github.com/IEEECS-UCF/Bash-Basics-Workshop> is private") {
+		t.Errorf("said %q", said)
+	}
+}

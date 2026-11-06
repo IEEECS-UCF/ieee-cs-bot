@@ -294,6 +294,11 @@ func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 	}
 	materials := pickMaterials(linked, found)
 	m := fetchMaterials(materials)
+	private := ""
+	if m.Private {
+		// Don't link a 404 from the chapter's LinkedIn
+		private, materials = materials, ""
+	}
 	in := aidraft.LinkedInInput{Event: e, Description: eventtext.PlainDescription(e), Materials: materials,
 		Readme: m.Readme, Slides: m.PDF, SlidesName: m.PDFName, Discord: discord}
 	d, why := aiLinkedIn(in)
@@ -307,6 +312,9 @@ func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 		source = "found nothing about it on Discord"
 	}
 	switch {
+	case private != "":
+		source += fmt.Sprintf("; **<%s> is private**, so the slides weren't read and the post doesn't link them. "+
+			"Make the repo public and run the recap again", private)
 	case materials == "":
 		source += "; no slides or repo found (link them with **Link slides** and run it again)"
 	case m.PDF != nil:

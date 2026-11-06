@@ -55,7 +55,12 @@ func TestFetchMaterialsReadsTheReadmeAndTheSlides(t *testing.T) {
 		t.Errorf("not a repo: %+v", m)
 	}
 	httpGet = func(string, map[string]string, time.Duration) (int, string, []byte, error) { return 503, "", nil, nil }
-	if m := FetchMaterials("https://github.com/IEEECS-UCF/Bash-Basics-Workshop"); m.Readme != "" || m.PDF != nil {
+	if m := FetchMaterials("https://github.com/IEEECS-UCF/Bash-Basics-Workshop"); m.Readme != "" || m.PDF != nil || m.Private {
 		t.Errorf("GitHub down: %+v", m)
+	}
+	// A private repo looks like a missing one to anyone not signed in
+	httpGet = func(string, map[string]string, time.Duration) (int, string, []byte, error) { return 404, "", nil, nil }
+	if m := FetchMaterials("https://github.com/IEEECS-UCF/Bash-Basics-Workshop"); !m.Private {
+		t.Errorf("private repo: %+v", m)
 	}
 }
