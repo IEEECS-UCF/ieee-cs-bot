@@ -26,7 +26,9 @@ var Topics = []struct{ Name, Pattern string }{
 	{"OS", `operating systems?|\bkernel\b|\blinux\b|hypervisor|virtualization|\bbsp\b|bootloader`},
 	{"Drivers", `(device|kernel|graphics|display|gpu|linux|windows|audio|camera|storage|network|software)[- ]drivers?\b|\bdrivers? (and|engineer|developer|development|software)`},
 	{"Computation", `\bhpc\b|high[- ]performance comput|parallel (comput|programm)|scientific comput|quantum comput|numerical`},
-	{"Discrete Mathematics", `cryptograph|formal (verification|methods)|algorithms? (engineer|research|developer|intern)|theoretical computer science|combinatori`},
+	// Not "algorithm engineer/intern": in job titles that's applied work
+	// (controls, ML, camera, signal processing), not discrete math
+	{"Discrete Mathematics", `cryptograph|formal (verification|methods)|theoretical computer science|combinatori`},
 }
 
 const Exclude = `\b(sales|marketing|recruit\w*|mba|accounting|accountant|finance|legal|business|designer|human resources|supply chain|procurement|technician|buyer|quant\w*|trading)\b`

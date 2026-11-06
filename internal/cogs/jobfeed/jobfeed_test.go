@@ -523,3 +523,17 @@ func TestPostedDateIsTheDayAtUCF(t *testing.T) {
 		t.Errorf("%q", footer)
 	}
 }
+
+func TestAlgorithmTitlesArentDiscreteMath(t *testing.T) {
+	for _, title := range []string{"ML AI Motor Controls Algorithm Intern", "Camera Algorithm Engineer Intern", "Algorithm Developer Intern"} {
+		if got := matchTopics(title); len(got) != 0 {
+			t.Errorf("%q matched %v", title, got)
+		}
+	}
+	if got := matchTopics("GPU Algorithm Engineer Intern"); len(got) != 1 || got[0] != "GPU Programming" {
+		t.Errorf("%v", got)
+	}
+	if got := matchTopics("Cryptography Research Intern"); len(got) != 1 || got[0] != "Discrete Mathematics" {
+		t.Errorf("%v", got)
+	}
+}
