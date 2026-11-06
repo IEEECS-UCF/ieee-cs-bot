@@ -262,3 +262,42 @@ func TestAChangeDuringARefreshIsKept(t *testing.T) {
 		t.Fatalf("%v %v", snap, err)
 	}
 }
+
+func TestVToolsDaysWithOnlyLinkedEventsAreNotRead(t *testing.T) {
+	testutil.Setup(t)
+	defer func(b, e any) {
+		vtFetchBranch = b.(func(time.Time, string) ([]vtools.Event, error))
+		vtFetchEvent = e.(func(string) (vtools.Event, error))
+	}(vtFetchBranch, vtFetchEvent)
+	linked := event(gid("linked"), name("Bash Scripting"), days(-3))
+	skipped := event(gid("skipped"), name("Fall Social"), days(-2))
+	open := event(gid("open"), name("Intro to Embedded"), days(4))
+	records := map[string]*store.Record{
+		"linked":  {Links: map[string]store.Link{"vtools": {ID: "552721"}}},
+		"skipped": {Links: map[string]store.Link{"vtools": {Skipped: true}}},
+	}
+	var read []string
+	vtFetchBranch = func(day time.Time, _ string) ([]vtools.Event, error) {
+		read = append(read, pytime.DayString(day))
+		return []vtools.Event{{"id": "7", "title": open.Name, "start-time": pytime.Isoformat(open.Start)}}, nil
+	}
+	vtFetchEvent = func(id string) (vtools.Event, error) {
+		return vtools.Event{"id": id, "title": linked.Name, "start-time": pytime.Isoformat(linked.Start)}, nil
+	}
+	snap := NewSnapshot(nil, nil, NOW)
+	if err := fetchVTools([]eventtext.Event{linked, skipped, open}, records, snap); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(read, []string{pytime.DayString(open.Start)}) {
+		t.Errorf("read days %v, want only %s", read, pytime.DayString(open.Start))
+	}
+	if l := snap.VTools["linked"]; l == nil || l.ID != "552721" || !l.Linked {
+		t.Errorf("linked: %+v", l)
+	}
+	if snap.VTools["skipped"] != SkippedListing {
+		t.Errorf("skipped: %+v", snap.VTools["skipped"])
+	}
+	if l := snap.VTools["open"]; l == nil || l.ID != "7" {
+		t.Errorf("open: %+v", l)
+	}
+}

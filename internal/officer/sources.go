@@ -611,9 +611,16 @@ func fetchKnightConnect(events []eventtext.Event, records map[string]*store.Reco
 }
 
 func fetchVTools(events []eventtext.Event, records map[string]*store.Record, snap *Snapshot) error {
+	// A day's list is only matched against events without a link (or a "not
+	// needed"), so days with none of those aren't read
 	seen := map[string]time.Time{}
 	var days []string
 	for _, e := range events {
+		if r := records[e.ID]; r != nil {
+			if _, linked := r.Links["vtools"]; linked {
+				continue
+			}
+		}
 		d := pytime.DayString(e.Start)
 		if _, ok := seen[d]; !ok {
 			seen[d] = pytime.Date(e.Start)
