@@ -40,6 +40,7 @@ var Actions = []Action{
 	{"copy:vtools", "vTools: copy fields", "Laid out for vTools' create form"},
 	{"link:vtools", "vTools: link listing", "Fix the match, or mark not needed"},
 	{"draft", "Draft announcement", "#announcements post + Instagram caption"},
+	{"linkedin", "LinkedIn recap", "After the event: a page post + one for the presenter"},
 	{"reminder", "Reminder settings", "Send or skip, and who it pings"},
 	{"checkin", "Check-in form & QR", "Create it, or see results"},
 	{"attendance", "Attendance for vTools", "Counts to type into the vTools report"},
@@ -189,7 +190,7 @@ func (k *card) onAction(ctx *botkit.Ctx) {
 	}
 	action := values[0]
 	e := k.event()
-	needsEvent := action == "edit" || action == "delete" || action == "draft" || action == "checkin" ||
+	needsEvent := action == "edit" || action == "delete" || action == "draft" || action == "checkin" || action == "linkedin" ||
 		strings.HasPrefix(action, "copy:")
 	if e == nil && needsEvent {
 		ctx.Ephemeral("That event isn't in the calendar anymore.")
@@ -206,6 +207,12 @@ func (k *card) onAction(ctx *botkit.Ctx) {
 		ephemeral(ctx, "Where does the room request stand?", k.roomPicker(e))
 	case action == "draft":
 		k.doDraft(ctx, *e)
+	case action == "linkedin":
+		if !aiConfigured() {
+			ctx.Ephemeral("LinkedIn recaps are written by Claude, and the bot has no Anthropic API key set up.")
+			return
+		}
+		ctx.Modal(k.linkedinModal(*e))
 	case action == "reminder":
 		ephemeral(ctx, "Day-of reminder for this event:", k.reminderPicker())
 	case action == "checkin":
@@ -260,6 +267,44 @@ func (k *card) doDraft(ctx *botkit.Ctx, e eventtext.Event) {
 	}
 	view := k.cog.newDraft(k, e, draft, link, opener)
 	ephemeral(ctx, botkit.Cut(text, discordMessageLimit), view.components)
+}
+
+// ---------- LinkedIn recap ----------
+
+func (k *card) linkedinModal(e eventtext.Event) *botkit.Modal {
+	return k.view.Modal("LinkedIn recap", []botkit.TextInput{
+		{ID: "ran", Label: "Who ran it", Optional: true, MaxLength: 200, Placeholder: "Presenter, plus any co-hosting clubs"},
+		{ID: "notes", Label: "What happened (optional)", Paragraph: true, Optional: true, MaxLength: 1000,
+			Placeholder: "What people did or took away, anything worth mentioning. No headcounts."},
+	}, func(ctx *botkit.Ctx) { k.submitLinkedIn(ctx, e) })
+}
+
+// submitLinkedIn has Claude write the page post and the presenter's post. They
+// come back as copy blocks: LinkedIn doesn't let a bot post as a page.
+func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
+	ctx.Defer(true)
+	materials := ""
+	if snap := k.cog.cache.WithStore(); snap != nil {
+		if s := snap.Slides[k.gid]; s != nil && s.URL != "" {
+			materials = s.URL
+		}
+	}
+	d, why := aiLinkedIn(e, eventtext.PlainDescription(e), ctx.Field("ran"), ctx.Field("notes"), materials)
+	if why != "" {
+		followup(ctx, why)
+		return
+	}
+	log.Printf("LinkedIn recap for %s written for %s", e.Name, who(ctx))
+	text := fmt.Sprintf("**LinkedIn recap for %s, written by Claude** (check every detail, then post it from the page by hand)"+
+		"\n**Page post**\n```\n%s\n```", e.Name, d.Page)
+	if d.Presenter != "" {
+		text += fmt.Sprintf("\n**For the presenter's own profile** (the page reshares it)\n```\n%s\n```", d.Presenter)
+	}
+	if d.Tag != "" {
+		text += "\n**Tag:** " + d.Tag
+	}
+	text += "\nOnce it's up, mark the recap step:"
+	ctx.Followup(botkit.Reply{Content: botkit.Cut(text, discordMessageLimit), Components: k.markButtons("recap"), Ephemeral: true})
 }
 
 func (k *card) doCheckin(ctx *botkit.Ctx, e eventtext.Event) {

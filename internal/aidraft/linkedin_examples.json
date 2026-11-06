@@ -1,0 +1,16 @@
+{
+  "_about": "LinkedIn example posts chosen by the chair (Nov 6, 2026): short, plain, one nerdy line, no headcounts. Source: ~/ieee-cs-ucf/linkedin-plain-samples.md. The gem5 one was written before the event; it's here for style only.",
+  "page": [
+    "We kicked off the year with our first GBM, where we laid out this semester's projects: a laptop built from scratch around an NVIDIA Jetson with IEEE UCF and Hack@UCF, an FPGA design competition, and a fall workshop series.\n\nBoth projects take new members all semester. No hardware experience needed, just a willingness to read datasheets.\n\n#UCF #IEEE #EmbeddedSystems #FPGA",
+    "We teamed up with FOSS @ UCF for a beginner's guide to Linux, covering how to pick a distro, install it, and get comfortable using it day to day. Thanks to Richard Hammingh and Ryan Zabatta for running it.\n\nA few people left with Linux on their laptops. A few more left with a USB stick and a plan.\n\nSlides: github.com/IEEECS-UCF/Beginners-Guide-to-Linux\n\n#UCF #IEEE #SystemsProgramming",
+    "Our intro to embedded systems workshop gave everyone an ESP32 and a breadboard and took them from zero to writing code that controls real hardware: driving outputs, reading inputs and keeping time.\n\nBy the end of the night every LED was blinking. Most of them on purpose.\n\nSlides and setup: github.com/IEEECS-UCF/Intro-to-Embedded\n\n#UCF #IEEE #EmbeddedSystems",
+    "Our members helped IEEE UCF run an embedded systems workshop at Knight Hacks IX, helping hackers bring hardware into their weekend projects.\n\nThirty-six hours, a lot of jumper wires, and only a little magic smoke.\n\n#UCF #IEEE #EmbeddedSystems",
+    "Our October GBM was an intro to GPU programming, led by Eren Siegman with live demos on an AMD Instinct MI300X.\n\nWe covered how GPUs run thousands of threads at once, how to write a first kernel in HIP with the CUDA version alongside, and how to tell whether your code is waiting on math or on memory. (It's usually memory.)\n\nSlides and code: github.com/IEEECS-UCF/Intro-to-GPU-Kernels\n\n#UCF #IEEE #GPU #HPC",
+    "We hosted a Halloween social with ACM, IEEE Women in Engineering and SPCB: food, games and a costume contest.\n\nFour clubs, one room, zero segfaults. Thanks to everyone who came out and to our co-hosts for putting it together. 🎃\n\n#UCF #IEEE",
+    "Richard Hammingh ran our intro to Bash: getting comfortable in the terminal, chaining small programs together, and writing scripts to automate the boring parts.\n\nNo one ran `rm -rf /`. We checked.\n\n#UCF #IEEE #SystemsProgramming",
+    "Derrick ran our intro to gem5, the open-source simulator architects use to test processor designs before any silicon exists.\n\nEveryone simulated a computer on their computer, which is about as close to the metal as you can get without a fab.\n\n#UCF #IEEE #ComputerArchitecture"
+  ],
+  "presenter": [
+    "Last month I ran an intro to GPU programming for IEEE Computer Society at UCF, with live demos on an AMD Instinct MI300X.\n\nThe part I most wanted people to leave with: most GPU code is limited by memory, not math. Once you can see that, you know where to start making things faster.\n\nIf you want to try it, the slides and the three demos are open: github.com/IEEECS-UCF/Intro-to-GPU-Kernels\n\nThanks to everyone who came out and stayed for questions."
+  ]
+}

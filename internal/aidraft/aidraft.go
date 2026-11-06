@@ -111,7 +111,14 @@ func DraftFromNotes(ctx context.Context, notes string, examples []string) (strin
 	return Write(ctx, Prompt(examples, FromNotes(notes)))
 }
 
+// Write is an #announcements draft, cut to Discord's 2,000 characters.
 func Write(ctx context.Context, content []anthropic.BetaContentBlockParamUnion) (string, string) {
+	return write(ctx, System, content, 2000)
+}
+
+// write asks Claude with the given instructions: (text, "") or ("", why it
+// failed). The text is cut to limit characters.
+func write(ctx context.Context, system string, content []anthropic.BetaContentBlockParamUnion, limit int) (string, string) {
 	client := anthropic.NewClient()
 	response, err := client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
 		Model:        Model,
@@ -119,7 +126,7 @@ func Write(ctx context.Context, content []anthropic.BetaContentBlockParamUnion) 
 		OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortMedium},
 		Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
 		Fallbacks:    anthropic.BetaFallbacksParamOfDefault(),
-		System:       []anthropic.BetaTextBlockParam{{Text: System}},
+		System:       []anthropic.BetaTextBlockParam{{Text: system}},
 		Messages:     []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(content...)},
 	})
 	if err != nil {
@@ -144,9 +151,8 @@ func Write(ctx context.Context, content []anthropic.BetaContentBlockParamUnion) 
 	if response.StopReason == "max_tokens" {
 		return "", "Claude's draft came out too long. Try again."
 	}
-	r := []rune(out)
-	if len(r) > 2000 {
-		out = string(r[:2000])
+	if r := []rune(out); len(r) > limit {
+		out = string(r[:limit])
 	}
 	return out, ""
 }

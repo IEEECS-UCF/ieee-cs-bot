@@ -97,6 +97,9 @@ var (
 	aiDraftFromNotes = func(notes string, examples []string) (string, string) {
 		return aidraft.DraftFromNotes(context.Background(), notes, examples)
 	}
+	aiLinkedIn = func(e eventtext.Event, description, ranBy, notes, materials string) (aidraft.LinkedInDraft, string) {
+		return aidraft.DraftLinkedIn(context.Background(), e, description, ranBy, notes, materials)
+	}
 	readAttachment = func(url string) ([]byte, error) {
 		resp, err := attachmentClient.Get(url)
 		if err != nil {
