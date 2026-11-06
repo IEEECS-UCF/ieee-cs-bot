@@ -12,11 +12,11 @@
 package members
 
 import (
-	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/pytime"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/store"
 )
 
@@ -116,16 +116,7 @@ func today(day []time.Time) time.Time {
 // Now is the time in the chapter's time zone (REMINDER_TZ, like the officer
 // tools), so a check on New Year's Eve evening counts for the year it is at
 // UCF, not in UTC.
-func Now() time.Time {
-	loc, err := time.LoadLocation(os.Getenv("REMINDER_TZ"))
-	if err != nil || os.Getenv("REMINDER_TZ") == "" {
-		loc, err = time.LoadLocation("America/New_York")
-	}
-	if err != nil {
-		return time.Now()
-	}
-	return time.Now().In(loc)
-}
+func Now() time.Time { return time.Now().In(pytime.Zone()) }
 
 // Submit records a new check waiting for review.
 func Submit(userID int64, number, email string, day ...time.Time) *Record {

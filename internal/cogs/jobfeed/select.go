@@ -11,6 +11,7 @@ import (
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/jobs"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/pytime"
 )
 
 const OrgName = "IEEE CS"
@@ -438,7 +439,7 @@ func buildEmbed(r *role, logoURL string) *discordgo.MessageEmbed {
 	if logoURL != "" {
 		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: logoURL}
 	}
-	posted := time.Unix(r.datePosted, 0).UTC().Format(time.DateOnly)
+	posted := time.Unix(r.datePosted, 0).In(pytime.Zone()).Format(time.DateOnly)
 	via := r.source
 	if r.source == r.company {
 		via = "company careers page"

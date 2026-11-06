@@ -1063,8 +1063,10 @@ func (w *worker) workdayLocations(base string, p workdayPosting) ([]string, []st
 
 func (w *worker) loadWorkday(spec WorkdaySpec, cutoff int64, keep Filter, isStudent func(string) bool) WorkdayResult {
 	listings, err := func() ([]Listing, error) {
-		now := time.Now().UTC()
-		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Unix()
+		// Workday says "posted 3 days ago": count back from today at UCF, so
+		// the date on the post is the day it was at UCF
+		now := time.Now().In(pytime.Zone())
+		today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
 		cutoffDays := int(max(0, floorDiv(today-cutoff, 86400)))
 		host := fmt.Sprintf("%s.%s.myworkdayjobs.com", spec.Tenant, spec.WD)
 		base := fmt.Sprintf("https://%s/wday/cxs/%s/%s", host, spec.Tenant, spec.Site)

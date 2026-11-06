@@ -447,3 +447,79 @@ func TestTimeSnowflake(t *testing.T) {
 		t.Errorf("%d", got)
 	}
 }
+
+func TestARejectedPostIsDroppedAfterAFewTries(t *testing.T) {
+	testutil.Setup(t)
+	c, f := testCog(t)
+	f.listings = []jobs.Listing{listing("a", "Firmware Intern", "Acme", "https://acme.com/1", now.Unix())}
+	f.sendErr = &discordgo.RESTError{Response: &http.Response{StatusCode: 400, Status: "400 Bad Request"}}
+	for i := 1; i < RejectLimit; i++ {
+		c.checkJobs()
+		if len(c.state.PostedIDs) != 0 {
+			t.Fatalf("gave up after %d tries", i)
+		}
+	}
+	c.checkJobs()
+	if c.state.PostedIDs["a"] == 0 {
+		t.Error("still trying a post Discord refused every time")
+	}
+	f.sendErr = nil
+	c.checkJobs()
+	if len(f.posted) != 0 {
+		t.Errorf("posted %d after giving up", len(f.posted))
+	}
+}
+
+func TestOtherPostErrorsAreAlwaysTriedAgain(t *testing.T) {
+	testutil.Setup(t)
+	c, f := testCog(t)
+	f.listings = []jobs.Listing{listing("a", "Firmware Intern", "Acme", "https://acme.com/1", now.Unix())}
+	f.sendErr = &discordgo.RESTError{Response: &http.Response{StatusCode: 503, Status: "503 Service Unavailable"}}
+	for i := 0; i < RejectLimit+2; i++ {
+		c.checkJobs()
+	}
+	if len(c.state.PostedIDs) != 0 {
+		t.Error("gave up on a post Discord was only too busy for")
+	}
+}
+
+func TestAMissedLogoIsLookedUpAgain(t *testing.T) {
+	testutil.Setup(t)
+	c, _ := testCog(t)
+	tries := 0
+	c.fetchLogo = func(string) string {
+		tries++
+		if tries == 1 {
+			return "" // a timeout or a 429
+		}
+		return "https://logo/beta.png"
+	}
+	if got := c.getLogo("https://simplify.jobs/c/Beta"); got != "" {
+		t.Fatalf("%q", got)
+	}
+	if got := c.getLogo("https://simplify.jobs/c/Beta"); got != "https://logo/beta.png" {
+		t.Errorf("a miss was remembered: %q", got)
+	}
+	c.getLogo("https://simplify.jobs/c/Beta")
+	if tries != 2 {
+		t.Errorf("fetched %d times; a found logo should be remembered", tries)
+	}
+	// An old state file's "no logo" doesn't stick either
+	c.state.Logos["https://simplify.jobs/c/Old"] = nil
+	if got := c.getLogo("https://simplify.jobs/c/Old"); got != "https://logo/beta.png" {
+		t.Errorf("%q", got)
+	}
+}
+
+func TestPostedDateIsTheDayAtUCF(t *testing.T) {
+	testutil.Setup(t)
+	// 9:30 PM in Orlando on Nov 6 is already Nov 7 in UTC
+	evening := time.Date(2026, 11, 7, 2, 30, 0, 0, time.UTC)
+	r := selectJobs([]jobs.Listing{listing("a", "Firmware Intern", "Acme", "https://acme.com/1", evening.Unix())}, 0)
+	if len(r) != 1 {
+		t.Fatalf("%d roles", len(r))
+	}
+	if footer := buildEmbed(r[0], "").Footer.Text; !strings.HasSuffix(footer, "Posted 2026-11-06") {
+		t.Errorf("%q", footer)
+	}
+}

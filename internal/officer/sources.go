@@ -47,23 +47,8 @@ const (
 
 var NotSlideRepos = map[string]bool{"website": true, "ieeecs-ucf.github.io": true, "ieee-cs-bot": true}
 
-var (
-	tzOnce sync.Once
-	tz     *time.Location
-)
-
-// TZ is REMINDER_TZ (America/New_York by default), read the first time it's needed.
-func TZ() *time.Location {
-	tzOnce.Do(func() {
-		loc, err := time.LoadLocation(botkit.Env("REMINDER_TZ", "America/New_York"))
-		if err != nil {
-			log.Printf("REMINDER_TZ: %v; using America/New_York", err)
-			loc, _ = time.LoadLocation("America/New_York")
-		}
-		tz = loc
-	})
-	return tz
-}
+// TZ is REMINDER_TZ (America/New_York by default).
+func TZ() *time.Location { return pytime.Zone() }
 
 func BranchSPOID() string        { return botkit.Env("VTOOLS_SPOID", "SBC13081") }
 func KnightConnectOrgID() string { return botkit.Env("KNIGHTCONNECT_ORG_ID", "430881") }

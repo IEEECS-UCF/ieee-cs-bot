@@ -132,6 +132,7 @@ type Cog struct {
 	mu               sync.Mutex
 	state            *jobState
 	needsHistorySync bool
+	rejected         map[string]int          // company + title -> times Discord refused the post (400)
 	listCache        ordered[listEntry]      // url -> (etag, recent listings)
 	boardCache       ordered[[]jobs.Listing] // slug -> recent listings
 	workdayCache     ordered[[]jobs.Listing] // tenant + site -> recent listings
@@ -400,8 +401,18 @@ func (c *Cog) runCheck() error {
 				return err
 			}
 			log.Printf("Failed to post job '%s' at %s: %v", r.title, r.company, err)
+			if c.givesUpOn(r, err) {
+				// Discord refused this exact post more than once: trying every
+				// check forever won't change its answer
+				log.Printf("Skipping job '%s' at %s: Discord rejected it %d times.", r.title, r.company, RejectLimit)
+				c.markPosted(r, now)
+				if err := c.saveState(); err != nil {
+					return err
+				}
+			}
 			continue
 		}
+		delete(c.rejected, rejectKey(r))
 		// Save right away so a crash can never cause a double post
 		c.markPosted(r, now)
 		if err := c.saveState(); err != nil {
@@ -493,21 +504,46 @@ func (c *Cog) channelHistory(channelID string, after time.Time, each func(*disco
 	}
 }
 
+// RejectLimit is how many checks in a row Discord can refuse a post with a
+// 400 before the feed stops trying it. Other errors (a 429, a 5xx, a missing
+// channel) are always tried again.
+const RejectLimit = 3
+
+func rejectKey(r *role) string { return r.company + "\x00" + r.title }
+
+// givesUpOn counts a refused post and says whether it's time to stop trying.
+func (c *Cog) givesUpOn(r *role, err error) bool {
+	if botkit.HTTPStatus(err) != 400 {
+		return false
+	}
+	if c.rejected == nil {
+		c.rejected = map[string]int{}
+	}
+	key := rejectKey(r)
+	c.rejected[key]++
+	if c.rejected[key] < RejectLimit {
+		return false
+	}
+	delete(c.rejected, key)
+	return true
+}
+
 func (c *Cog) getLogo(companyURL string) string {
 	if companyURL == "" {
 		return ""
 	}
-	logo, ok := c.state.Logos[companyURL]
-	if !ok {
-		if found := c.fetchLogo(companyURL); found != "" {
-			logo = &found
-		}
-		c.state.Logos[companyURL] = logo
+	if logo := c.state.Logos[companyURL]; logo != nil {
+		return *logo
 	}
-	if logo == nil {
+	// Only a found logo is remembered: a timeout or a 429 used to be saved as
+	// "no logo" for good. A miss costs one page fetch per new post.
+	found := c.fetchLogo(companyURL)
+	if found == "" {
+		delete(c.state.Logos, companyURL)
 		return ""
 	}
-	return *logo
+	c.state.Logos[companyURL] = &found
+	return found
 }
 
 // Setup loads the job feed if JOBS_CHANNEL_ID is set.

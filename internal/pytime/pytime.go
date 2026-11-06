@@ -3,9 +3,36 @@
 package pytime
 
 import (
+	"log"
+	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+var (
+	zoneOnce sync.Once
+	zone     *time.Location
+)
+
+// Zone is the chapter's time zone: REMINDER_TZ, or America/New_York.
+func Zone() *time.Location {
+	zoneOnce.Do(func() {
+		name := os.Getenv("REMINDER_TZ")
+		if name == "" {
+			name = "America/New_York"
+		}
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			log.Printf("REMINDER_TZ: %v; using America/New_York", err)
+			if loc, err = time.LoadLocation("America/New_York"); err != nil {
+				loc = time.UTC
+			}
+		}
+		zone = loc
+	})
+	return zone
+}
 
 // Isoformat matches datetime.isoformat() for an aware datetime with whole
 // seconds: 2026-11-12T18:30:00-05:00 (or +00:00 for UTC).
