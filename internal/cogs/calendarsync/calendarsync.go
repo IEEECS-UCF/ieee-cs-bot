@@ -3,6 +3,7 @@
 package calendarsync
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -108,6 +109,7 @@ type Cog struct {
 	canWrite      bool
 	fetchFailures *botkit.Streak // Google or Discord hiccups: alert if they persist
 	state         *State
+	saved         []byte // state as last written (compact JSON)
 
 	soonMu sync.Mutex
 	soon   bool // pending sync after a Discord-side change
@@ -178,10 +180,20 @@ func loadState() *State {
 	return state
 }
 
+// saveState writes the state file, unless it's the same as last written: a
+// sync saves after every event it looks at, and most syncs change nothing.
 func (c *Cog) saveState() error {
+	raw, err := json.Marshal(c.state)
+	if err != nil {
+		return err
+	}
+	if c.saved != nil && bytes.Equal(raw, c.saved) {
+		return nil
+	}
 	if err := store.Save(StateFile, c.state); err != nil {
 		return err
 	}
+	c.saved = raw
 	c.publish()
 	return nil
 }
