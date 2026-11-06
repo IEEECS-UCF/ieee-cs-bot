@@ -20,7 +20,12 @@ func noDiscord(t *testing.T) {
 	swap(t, &eventMessages, func(*botkit.Bot, eventtext.Event) []cogapi.Snippet { return nil })
 }
 
-func TestLinkedInRecapUsesTheEventTheNotesAndTheCardsSlides(t *testing.T) {
+// noMaterials keeps tests off GitHub.
+func noMaterials(t *testing.T) {
+	swap(t, &fetchMaterials, func(string) off.Materials { return off.Materials{} })
+}
+
+func TestLinkedInRecapReadsTheSlidesInTheCardsRepo(t *testing.T) {
 	tc := newTestCog(t)
 	noDiscord(t)
 	e := event(gid("g1"), days(-2))
@@ -28,30 +33,62 @@ func TestLinkedInRecapUsesTheEventTheNotesAndTheCardsSlides(t *testing.T) {
 	tc.cache.Change(func(s *off.Snapshot) {
 		s.Slides["g1"] = &off.SlideMatch{Name: "Bash-Workshop", URL: "https://github.com/IEEECS-UCF/Bash-Workshop"}
 	})
+	var fetched []string
+	swap(t, &fetchMaterials, func(link string) off.Materials {
+		fetched = append(fetched, link)
+		return off.Materials{Repo: "Bash-Workshop", Readme: "# Bash\nRun by Richard Hammingh", PDF: []byte("%PDF"), PDFName: "Bash Workshop.pdf"}
+	})
 	var asked []aidraft.LinkedInInput
 	swap(t, &aiLinkedIn, func(in aidraft.LinkedInInput) (aidraft.LinkedInDraft, string) {
 		asked = append(asked, in)
 		return aidraft.LinkedInDraft{Page: "Richard ran our intro to Bash.\n\nNo one ran rm -rf /. We checked.",
 			Presenter: "I ran an intro to Bash for IEEE Computer Society at UCF.", Tag: "Richard Hammingh"}, ""
 	})
-	ctx := submit(tc.bot, author, map[string]string{"ran": "Richard Hammingh", "notes": "everyone wrote a first script"})
+	ctx := press(tc.bot, author, "linkedin")
 	k.submitLinkedIn(ctx, e)
-	if len(asked) != 1 || asked[0].RanBy != "Richard Hammingh" || asked[0].Notes != "everyone wrote a first script" ||
-		asked[0].Materials != "https://github.com/IEEECS-UCF/Bash-Workshop" || asked[0].Description != "Learn bash." {
+	if len(asked) != 1 || asked[0].Materials != "https://github.com/IEEECS-UCF/Bash-Workshop" || asked[0].Description != "Learn bash." ||
+		!strings.Contains(asked[0].Readme, "Richard Hammingh") || string(asked[0].Slides) != "%PDF" || asked[0].SlidesName != "Bash Workshop.pdf" {
 		t.Fatalf("asked %+v", asked)
+	}
+	if len(fetched) != 1 || fetched[0] != "https://github.com/IEEECS-UCF/Bash-Workshop" {
+		t.Errorf("fetched %v", fetched)
 	}
 	said := tc.f.lastSaid(ctx)
 	for _, want := range []string{"**Page post**", "No one ran rm -rf /. We checked.", "presenter's own profile",
 		"I ran an intro to Bash", "**Tag:** Richard Hammingh", "mark the recap step", "found nothing about it on Discord",
-		"materials: <https://github.com/IEEECS-UCF/Bash-Workshop>"} {
+		"read the slides (Bash Workshop.pdf) and README in <https://github.com/IEEECS-UCF/Bash-Workshop>"} {
 		if !strings.Contains(said, want) {
 			t.Errorf("missing %q in %q", want, said)
 		}
 	}
 }
 
+// The card's LinkedIn recap goes straight to Claude: no form to fill in.
+func TestLinkedInRecapAsksNothingFirst(t *testing.T) {
+	tc := newTestCog(t)
+	noDiscord(t)
+	noMaterials(t)
+	e := event(gid("g1"), days(-2))
+	k := cardFor(tc, e)
+	swap(t, &aiConfigured, func() bool { return true })
+	called := 0
+	swap(t, &aiLinkedIn, func(aidraft.LinkedInInput) (aidraft.LinkedInDraft, string) {
+		called++
+		return aidraft.LinkedInDraft{Page: "We ran it.\n\nJoke."}, ""
+	})
+	ctx := press(tc.bot, author, "linkedin")
+	k.onAction(ctx)
+	if called != 1 || len(tc.f.find("POST", `/interactions/.*/callback`)) == 0 {
+		t.Errorf("called %d", called)
+	}
+	if strings.Contains(tc.f.lastSaid(ctx), "Who ran it") {
+		t.Error("still asks who ran it")
+	}
+}
+
 func TestLinkedInRecapReadsDiscordAndFindsTheMaterialsThere(t *testing.T) {
 	tc := newTestCog(t)
+	noMaterials(t)
 	e := event(gid("g1"), days(-2))
 	k := cardFor(tc, e)
 	swap(t, &eventMessages, func(_ *botkit.Bot, ev eventtext.Event) []cogapi.Snippet {
@@ -67,7 +104,7 @@ func TestLinkedInRecapReadsDiscordAndFindsTheMaterialsThere(t *testing.T) {
 		asked = in
 		return aidraft.LinkedInDraft{Page: "post"}, ""
 	})
-	ctx := submit(tc.bot, author, map[string]string{"ran": "", "notes": ""})
+	ctx := press(tc.bot, author, "linkedin")
 	k.submitLinkedIn(ctx, e)
 	if len(asked.Discord) != 3 || !strings.Contains(asked.Discord[0], "#announcements · Ricky · 2026-11-01\nBash workshop") {
 		t.Errorf("discord %q", asked.Discord)
@@ -97,12 +134,13 @@ func TestMaterialLinksAreTheChaptersRepoAndSlides(t *testing.T) {
 func TestLinkedInRecapSaysWhyItFailed(t *testing.T) {
 	tc := newTestCog(t)
 	noDiscord(t)
+	noMaterials(t)
 	e := event(gid("g1"), days(-2))
 	k := cardFor(tc, e)
 	swap(t, &aiLinkedIn, func(aidraft.LinkedInInput) (aidraft.LinkedInDraft, string) {
 		return aidraft.LinkedInDraft{}, "Claude is busy right now. Try again in a minute."
 	})
-	ctx := submit(tc.bot, author, map[string]string{"ran": "", "notes": ""})
+	ctx := press(tc.bot, author, "linkedin")
 	k.submitLinkedIn(ctx, e)
 	if said := tc.f.lastSaid(ctx); !strings.Contains(said, "Claude is busy") {
 		t.Errorf("said %q", said)

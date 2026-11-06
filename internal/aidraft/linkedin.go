@@ -3,8 +3,10 @@ package aidraft
 import (
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -41,7 +43,7 @@ const LinkedInSystem = `You write LinkedIn posts for a university student chapte
 Write in the style of the example posts you're given: short and plain, with one nerdy line.
 
 The page post has exactly two short paragraphs before the link, like every example:
-1. What happened, in one or two sentences in the active voice. For a workshop or talk, start with who ran it ("Richard Hammingh ran our intro to Bash: ..."), then the big-picture takeaways after a colon ("the basics of embedded programming", not individual steps like "debouncing"). For a social or co-hosted event, start with "We".
+1. What happened, in one or two sentences in the active voice. For a workshop or talk, start with who ran it ("Richard Hammingh ran our intro to Bash: ..."), then the big-picture takeaways after a colon ("the basics of embedded programming", not individual steps like "debouncing"). For a social or co-hosted event, or when the facts don't say who ran it, start with "We".
 2. The nerdy line on its own: one short joke or wink only a CS or hardware person would make, like the examples' "No one ran rm -rf /. We checked." or "Four clubs, one room, zero segfaults." No setup sentence before it. It must be obviously a joke or follow from the facts given. Never state an invented fact as true.
 - 150 to 450 characters before the link and hashtags.
 - No paragraph explaining what the topic is used for or why it matters.
@@ -54,9 +56,10 @@ The presenter post, for whoever ran the event to put on their own LinkedIn profi
 - If you don't know who ran it, write it with [Name] where the name goes.
 
 Rules for both:
-- Use only the facts given: the event's details, the officer's notes and the Discord messages. Never invent speakers, companies, results, quotes, numbers or what attendees did.
+- Use only the facts given: the event's details, its slides and README, and the Discord messages. Never invent speakers, companies, results, quotes, numbers or what attendees did.
+- The slides and README, when given, are the best source for what the event covered and who presented it. Take the big-picture takeaways from them, not a list of every slide.
 - The Discord messages are the chapter's own server around the event's date: its announcement, its planning thread, the post sharing the materials, and chat. Use them to learn what the event covered, who ran or co-hosted it, and what people did. Some are about other events or are jokes; ignore those.
-- What's on Discord is background, not something to repeat: don't quote anyone, don't mention planning, room or schedule problems, food, or anyone's name unless they ran or co-hosted it. The officer's notes win over Discord when they disagree.
+- What's on Discord is background, not something to repeat: don't quote anyone, don't mention planning, room or schedule problems, food, or anyone's name unless they ran or co-hosted it. The slides and README win over Discord when they disagree.
 - If a materials link is given, the page post must include it on its own line before the hashtags, e.g. "Slides and code: <link>". The presenter post includes it too.
 - If the facts are too thin to say what people did or took away, keep it general rather than making something up.
 
@@ -70,10 +73,13 @@ Reply in exactly this format, with nothing before or after:
 
 // LinkedInInput is everything known about the event.
 type LinkedInInput struct {
-	Event                     eventtext.Event
-	Description, RanBy, Notes string
-	Materials                 string   // the slides or repo link ("" for none)
-	Discord                   []string // messages about the event, one per entry
+	Event       eventtext.Event
+	Description string
+	Materials   string   // the slides or repo link ("" for none)
+	Readme      string   // the materials repo's README ("" for none)
+	Slides      []byte   // the slides as a PDF (nil for none)
+	SlidesName  string   // the PDF's file name
+	Discord     []string // messages about the event, one per entry
 }
 
 // LinkedInDetails is what to write about.
@@ -85,10 +91,17 @@ func LinkedInDetails(in LinkedInInput) string {
 		return strings.TrimSpace(s)
 	}
 	e := in.Event
+	slides := "(none)"
+	if len(in.Slides) > 0 {
+		slides = "attached above as a PDF (" + or(in.SlidesName, "slides.pdf") + ")"
+	}
 	text := fmt.Sprintf("Write the LinkedIn posts for this event, which has already happened:\n"+
-		"Name: %s\nDate: %s\nRoom: %s\nDescription: %s\nRan it: %s\nMaterials link: %s\nOfficer's notes on what happened: %s",
+		"Name: %s\nDate: %s\nRoom: %s\nDescription: %s\nMaterials link: %s\nSlides: %s",
 		e.Name, pytime.Strftime(e.Start, "%A, %B %-d, %Y"), or(e.Location, "(not given)"), or(in.Description, "(none)"),
-		or(in.RanBy, "(not given)"), or(in.Materials, "(none)"), or(in.Notes, "(none)"))
+		or(in.Materials, "(none)"), slides)
+	if r := strings.TrimSpace(in.Readme); r != "" {
+		text += "\n\nThe materials repo's README:\n<readme>\n" + r + "\n</readme>"
+	}
 	if len(in.Discord) == 0 {
 		return text + "\n\nDiscord messages about it: (none found)"
 	}
@@ -150,11 +163,18 @@ const linkedinLimit = 6000
 
 func linkedinRequest(in LinkedInInput) []anthropic.BetaContentBlockParamUnion {
 	page, presenter := LinkedInExamples()
-	return []anthropic.BetaContentBlockParamUnion{
+	blocks := []anthropic.BetaContentBlockParamUnion{
 		{OfText: &anthropic.BetaTextBlockParam{Text: LinkedInExamplesText(page, presenter),
 			CacheControl: anthropic.NewBetaCacheControlEphemeralParam()}},
-		{OfText: &anthropic.BetaTextBlockParam{Text: LinkedInDetails(in)}},
 	}
+	if len(in.Slides) > 0 {
+		// Cached too: a revision sends the deck again
+		doc := anthropic.NewBetaDocumentBlock(anthropic.BetaBase64PDFSourceParam{Data: base64.StdEncoding.EncodeToString(in.Slides)})
+		doc.OfDocument.Title = anthropic.String(in.SlidesName)
+		doc.OfDocument.CacheControl = anthropic.NewBetaCacheControlEphemeralParam()
+		blocks = append(blocks, doc)
+	}
+	return append(blocks, anthropic.BetaContentBlockParamUnion{OfText: &anthropic.BetaTextBlockParam{Text: LinkedInDetails(in)}})
 }
 
 // Format is the draft in the reply format Claude uses, for a revision thread.
@@ -185,6 +205,13 @@ func LinkedInFrom(t *Thread, materials string) (LinkedInDraft, string) {
 // or (empty, why it failed).
 func DraftLinkedIn(ctx context.Context, in LinkedInInput) (LinkedInDraft, string) {
 	reply, why := write(ctx, LinkedInSystem, linkedinRequest(in), linkedinLimit)
+	if strings.Contains(why, "(400)") && len(in.Slides) > 0 {
+		// Claude turned the request down, most likely the PDF (over 100
+		// pages, or damaged): write it from the README and Discord instead
+		log.Printf("LinkedIn recap: request with %s refused (%s); retrying without the slides", in.SlidesName, why)
+		in.Slides = nil
+		reply, why = write(ctx, LinkedInSystem, linkedinRequest(in), linkedinLimit)
+	}
 	if why != "" {
 		return LinkedInDraft{}, why
 	}

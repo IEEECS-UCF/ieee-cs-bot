@@ -214,7 +214,7 @@ func (k *card) onAction(ctx *botkit.Ctx) {
 			ctx.Ephemeral("LinkedIn recaps are written by Claude, and the bot has no Anthropic API key set up.")
 			return
 		}
-		ctx.Modal(k.linkedinModal(*e))
+		k.submitLinkedIn(ctx, *e)
 	case action == "reminder":
 		ephemeral(ctx, "Day-of reminder for this event:", k.reminderPicker())
 	case action == "checkin":
@@ -273,17 +273,10 @@ func (k *card) doDraft(ctx *botkit.Ctx, e eventtext.Event) {
 
 // ---------- LinkedIn recap ----------
 
-func (k *card) linkedinModal(e eventtext.Event) *botkit.Modal {
-	return k.view.Modal("LinkedIn recap", []botkit.TextInput{
-		{ID: "ran", Label: "Who ran it", Optional: true, MaxLength: 200, Placeholder: "Presenter, plus any co-hosting clubs"},
-		{ID: "notes", Label: "What happened (optional)", Paragraph: true, Optional: true, MaxLength: 1000,
-			Placeholder: "What people did or took away, anything worth mentioning. No headcounts."},
-	}, func(ctx *botkit.Ctx) { k.submitLinkedIn(ctx, e) })
-}
-
 // submitLinkedIn has Claude write the page post and the presenter's post, from
-// the event, the officer's notes and what was said about it on Discord. They
-// come back as copy blocks: LinkedIn doesn't let a bot post as a page.
+// the event, its slides and README on GitHub, and what was said about it on
+// Discord. They come back as copy blocks: LinkedIn doesn't let a bot post as
+// a page. Nothing is asked first: the slides say what was covered and who ran it.
 func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 	ctx.Defer(true)
 	linked := ""
@@ -300,8 +293,9 @@ func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 		found = append(found, materialLinks(m.Text)...)
 	}
 	materials := pickMaterials(linked, found)
-	in := aidraft.LinkedInInput{Event: e, Description: eventtext.PlainDescription(e), RanBy: ctx.Field("ran"),
-		Notes: ctx.Field("notes"), Materials: materials, Discord: discord}
+	m := fetchMaterials(materials)
+	in := aidraft.LinkedInInput{Event: e, Description: eventtext.PlainDescription(e), Materials: materials,
+		Readme: m.Readme, Slides: m.PDF, SlidesName: m.PDFName, Discord: discord}
 	d, why := aiLinkedIn(in)
 	if why != "" {
 		followup(ctx, why)
@@ -310,12 +304,21 @@ func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 	log.Printf("LinkedIn recap for %s written for %s (%d Discord messages)", e.Name, who(ctx), len(snippets))
 	source := fmt.Sprintf("read %d Discord message(s) about it", len(snippets))
 	if len(snippets) == 0 {
-		source = "found nothing about it on Discord, so it's from the event and your notes only"
+		source = "found nothing about it on Discord"
 	}
-	if materials != "" {
-		source += "; materials: <" + materials + ">"
-	} else {
+	switch {
+	case materials == "":
 		source += "; no slides or repo found (link them with **Link slides** and run it again)"
+	case m.PDF != nil:
+		source += fmt.Sprintf("; read the slides (%s)", m.PDFName)
+		if m.Readme != "" {
+			source += " and README"
+		}
+		source += " in <" + materials + ">"
+	case m.Readme != "":
+		source += "; read the README in <" + materials + "> (no PDF of the slides there)"
+	default:
+		source += "; materials: <" + materials + "> (couldn't read them, so they're only linked)"
 	}
 	r := &recap{card: k, event: e, source: source, materials: materials, draft: d, thread: aidraft.LinkedInThread(in, d)}
 	ctx.Followup(botkit.Reply{Content: r.text(), Components: r.buttons(), Ephemeral: true})

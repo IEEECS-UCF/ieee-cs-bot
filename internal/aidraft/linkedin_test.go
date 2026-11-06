@@ -28,10 +28,9 @@ func TestParseLinkedInSplitsTheThreeParts(t *testing.T) {
 func TestLinkedInDetailsSayWhatsMissing(t *testing.T) {
 	start := time.Date(2026, 11, 5, 18, 30, 0, 0, time.UTC)
 	e := eventtext.Event{Name: "Bash Scripting Workshop", Start: start, End: start.Add(2 * time.Hour)}
-	got := LinkedInDetails(LinkedInInput{Event: e, RanBy: "Richard Hammingh"})
+	got := LinkedInDetails(LinkedInInput{Event: e})
 	for _, want := range []string{"Name: Bash Scripting Workshop", "Thursday, November 5, 2026", "Room: (not given)",
-		"Ran it: Richard Hammingh", "Materials link: (none)", "Officer's notes on what happened: (none)", "already happened",
-		"Discord messages about it: (none found)"} {
+		"Materials link: (none)", "Slides: (none)", "already happened", "Discord messages about it: (none found)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %q", want, got)
 		}
@@ -113,5 +112,29 @@ func TestPageFormatProblemFitsTheExamples(t *testing.T) {
 	}
 	if !strings.Contains(LinkedInSystem, "exactly two short paragraphs") {
 		t.Error("the instructions lost the two-paragraph rule")
+	}
+}
+
+// The slides go to Claude as a PDF, cached so a revision doesn't pay for them
+// again, and the README goes in with the event's details.
+func TestTheSlidesAndReadmeGoToClaude(t *testing.T) {
+	start := time.Date(2026, 11, 5, 18, 30, 0, 0, time.UTC)
+	in := LinkedInInput{Event: eventtext.Event{Name: "Bash", Start: start, End: start}, Materials: "https://github.com/IEEECS-UCF/Bash",
+		Readme: "# Bash Basics\nRun by Richard Hammingh", Slides: []byte("%PDF"), SlidesName: "Bash Workshop.pdf"}
+	blocks := linkedinRequest(in)
+	if len(blocks) != 3 || blocks[1].OfDocument == nil || blocks[1].OfDocument.Source.OfBase64 == nil ||
+		blocks[1].OfDocument.Source.OfBase64.Data != "JVBERg==" || blocks[1].OfDocument.Title.Value != "Bash Workshop.pdf" {
+		t.Fatalf("%d blocks: %+v", len(blocks), blocks)
+	}
+	details := blocks[2].OfText.Text
+	if !strings.Contains(details, "Slides: attached above as a PDF (Bash Workshop.pdf)") ||
+		!strings.Contains(details, "<readme>\n# Bash Basics\nRun by Richard Hammingh\n</readme>") {
+		t.Errorf("%q", details)
+	}
+	if len(linkedinRequest(LinkedInInput{Event: in.Event})) != 2 {
+		t.Error("a document block with no slides")
+	}
+	if !strings.Contains(LinkedInSystem, "best source for what the event covered") {
+		t.Error("the instructions don't point Claude at the slides")
 	}
 }
