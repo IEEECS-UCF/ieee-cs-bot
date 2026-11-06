@@ -253,6 +253,9 @@ func StatusLine(kind string, r *store.Review, when string) string {
 	case Approved:
 		return fmt.Sprintf("Written by %s. Approved by <@%s>; posts in %s%s.%s", by, approver, where, at, PingNote(kind, r.Text))
 	case Missed:
+		if r.Approver != nil {
+			return fmt.Sprintf("Written by %s. Approved by <@%s>, but the bot couldn't post it before the event started.", by, approver)
+		}
 		return fmt.Sprintf("Written by %s. Nobody approved it before the event started, so it was never posted.", by)
 	case Cancelled:
 		why := r.Why
@@ -496,10 +499,8 @@ func ReminderAction(now, start time.Time, r *store.Review, reviewFrom, postAt ti
 		return ""
 	}
 	if !now.Before(start) {
-		if r.Status == Pending {
-			return "missed"
-		}
-		return ""
+		// Pending, or approved but never posted (the bot was down at posting time)
+		return "missed"
 	}
 	if !now.Before(postAt) && r.Status == Approved {
 		return "post"
@@ -511,8 +512,22 @@ func ReminderAction(now, start time.Time, r *store.Review, reviewFrom, postAt ti
 }
 
 // ReviewWindow is (when the review opens: reviewHour the day before, when it
-// posts: postHour on the day).
+// posts: postHour on the day, or an hour before the event if that's earlier,
+// so a morning event still gets its reminder).
 func ReviewWindow(start time.Time, reviewHour, postHour int) (time.Time, time.Time) {
 	y, m, d := start.Date()
-	return time.Date(y, m, d-1, reviewHour, 0, 0, 0, start.Location()), time.Date(y, m, d, postHour, 0, 0, 0, start.Location())
+	postAt := time.Date(y, m, d, postHour, 0, 0, 0, start.Location())
+	if latest := start.Add(-time.Hour); postAt.After(latest) {
+		postAt = latest
+	}
+	return time.Date(y, m, d-1, reviewHour, 0, 0, 0, start.Location()), postAt
 }
+
+// PostAt is when an approved reminder for an event starting at start posts.
+func PostAt(start time.Time) time.Time {
+	_, at := ReviewWindow(start, ReviewHour(), ReminderHour())
+	return at
+}
+
+// PostLabel is PostAt as "Sat Nov 21 at 8:00".
+func PostLabel(start time.Time) string { return pytime.Strftime(PostAt(start), "%a %b %-d at %-H:%M") }

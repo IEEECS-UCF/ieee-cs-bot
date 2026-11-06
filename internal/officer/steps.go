@@ -328,7 +328,7 @@ func reminderStep(e eventtext.Event, record *store.Record, snap *Snapshot, now t
 			return mk(Todo, "waiting for an officer to approve it")
 		}
 		if pending.Status == Approved {
-			return mk(Later, fmt.Sprintf("approved, posts %s at %d:00", pytime.Strftime(e.Start, "%a"), ReminderHour()))
+			return mk(Later, "approved, posts "+pytime.Strftime(PostAt(e.Start), "%a at %-H:%M"))
 		}
 	}
 	if !send {
@@ -340,8 +340,8 @@ func reminderStep(e eventtext.Event, record *store.Record, snap *Snapshot, now t
 		}
 		return mk(state, why)
 	}
-	return mk(Later, fmt.Sprintf("goes up for review the day before, posts %s at %d:00 if approved, %s",
-		pytime.Strftime(e.Start, "%a"), ReminderHour(), who))
+	return mk(Later, fmt.Sprintf("goes up for review the day before, posts %s if approved, %s",
+		pytime.Strftime(PostAt(e.Start), "%a at %-H:%M"), who))
 }
 
 func runSteps(e eventtext.Event, record *store.Record, marks map[string]string, snap *Snapshot, today, start, now time.Time) []*Step {

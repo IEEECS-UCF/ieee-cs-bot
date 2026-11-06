@@ -190,12 +190,17 @@ func (c *Cog) Run() error {
 			continue
 		}
 		ce := snap.Event(gid)
+		start := event.Start.In(officer.TZ())
+		if movedFrom(sent[event.ID], start) {
+			// Its reminder went out for another day and the event was moved: remind again for the new day
+			log.Printf("%s moved to %s after its reminder posted; it gets a new one", event.Name, pytime.Strftime(start, "%a %b %-d"))
+			delete(sent, event.ID)
+		}
 		if _, done := sent[event.ID]; done || ce == nil {
 			continue
 		}
-		start := event.Start.In(officer.TZ())
 		reviewFrom, postAt := officer.ReviewWindow(start, officer.ReviewHour(), officer.ReminderHour())
-		when := fmt.Sprintf("%s at %d:00", pytime.Strftime(start, "%a %b %-d"), officer.ReminderHour())
+		when := officer.PostLabel(start)
 		record := store.EventStore{}.Get(gid)
 		override := record.Reminder
 		shouldSend, why := officer.ShouldSend(event.Name, event.Location, override)
@@ -295,7 +300,7 @@ func (c *Cog) Run() error {
 			}
 		case "missed":
 			c.closeReview(gid, current, officer.Missed, "")
-			log.Printf("Reminder for %s was never approved, so it wasn't posted", event.Name)
+			log.Printf("Reminder for %s didn't post before the event started", event.Name)
 		}
 	}
 
@@ -306,6 +311,22 @@ func (c *Cog) Run() error {
 		}
 	}
 	return c.save()
+}
+
+// movedFrom reports whether a reminder sent for an event starting at sentFor
+// (as stored in the state file; "" when none was sent) was for a different
+// day than start.
+func movedFrom(sentFor string, start time.Time) bool {
+	if sentFor == "" {
+		return false
+	}
+	was, err := pytime.ParseIso(sentFor, time.UTC)
+	if err != nil {
+		return false
+	}
+	y1, m1, d1 := was.In(start.Location()).Date()
+	y2, m2, d2 := start.Date()
+	return y1 != y2 || m1 != m2 || d1 != d2
 }
 
 // closeReview takes the review off the table (no more buttons), saying why

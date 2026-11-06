@@ -222,13 +222,36 @@ func TestReminderTimeline(t *testing.T) {
 		{postAt, pending, "late"},
 		{postAt, with(func(r *store.Review) { r.LateNoted = true }), ""},
 		{start, pending, "missed"},
-		{start, approved, ""},
+		{start, approved, "missed"}, // approved, but the bot was down at posting time
 		{postAt, with(func(r *store.Review) { r.Status = Posted }), ""},
 	}
 	for i, c := range cases {
 		if got := act(c.now, c.r); got != c.want {
 			t.Errorf("case %d: %q, want %q", i, got, c.want)
 		}
+	}
+}
+
+// A reminder for an event at or before the posting hour posts an hour before
+// it starts; at 9:00 it would never have been before the start.
+func TestMorningEventReminderPostsBeforeItStarts(t *testing.T) {
+	for _, c := range []struct{ hour, minute, wantHour, wantMinute int }{
+		{9, 0, 8, 0}, {8, 30, 7, 30}, {9, 30, 8, 30}, {10, 0, 9, 0}, {18, 30, 9, 0},
+	} {
+		start := time.Date(2026, 11, 21, c.hour, c.minute, 0, 0, testutil.TZ)
+		_, postAt := ReviewWindow(start, 12, 9)
+		if want := time.Date(2026, 11, 21, c.wantHour, c.wantMinute, 0, 0, testutil.TZ); !postAt.Equal(want) {
+			t.Errorf("event at %d:%02d posts at %v, want %v", c.hour, c.minute, postAt, want)
+		}
+		approved := &store.Review{For: pytime.Isoformat(start), Status: Approved}
+		if got := ReminderAction(postAt, start, approved, start.AddDate(0, 0, -1), postAt); got != "post" {
+			t.Errorf("event at %d:%02d: %q at posting time, want post", c.hour, c.minute, got)
+		}
+	}
+	t.Setenv("REMINDER_HOUR", "9")
+	t.Setenv("REMINDER_REVIEW_HOUR", "12")
+	if got := PostLabel(time.Date(2026, 11, 21, 9, 0, 0, 0, testutil.TZ)); got != "Sat Nov 21 at 8:00" {
+		t.Errorf("label %q", got)
 	}
 }
 
