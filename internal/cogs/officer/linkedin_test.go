@@ -175,10 +175,10 @@ func TestALinkedInRecapCanBeRevisedWithFeedback(t *testing.T) {
 	seen := fakeRevise(t, "=== PAGE POST ===\nShorter recap.\n=== PRESENTER POST ===\nI ran it.\n=== TAG ===\nnone",
 		"Sure! Here you go.")
 	in := aidraft.LinkedInInput{Event: e, Materials: "https://github.com/IEEECS-UCF/Bash"}
-	d := aidraft.LinkedInDraft{Page: "Long recap.", Presenter: "I ran an intro to Bash."}
+	d := aidraft.LinkedInDraft{Page: "Long recap.", Presenter: "I ran an intro to Bash.", Lines: []string{"Spaces matter."}}
 	r := &recap{card: k, event: e, source: "read 0 Discord message(s) about it", materials: in.Materials, draft: d,
 		thread: aidraft.LinkedInThread(in, d)}
-	if !strings.Contains(r.text(), "Revise with AI") || !strings.Contains(labels(r.buttons()), "Revise with AI, Done") {
+	if !strings.Contains(r.text(), "Revise with AI") || !strings.Contains(r.text(), "swap in:**\n- Spaces matter.") || !strings.Contains(labels(r.buttons()), "Revise with AI, Done") {
 		t.Fatalf("text %q buttons %s", r.text(), labels(r.buttons()))
 	}
 	ctx := submit(tc.bot, author, map[string]string{"feedback": "half as long"})

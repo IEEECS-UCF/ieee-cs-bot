@@ -23,6 +23,21 @@ import (
 
 const Model = anthropic.ModelClaudeSonnet5_5
 
+// RecapModel writes LinkedIn recaps. They're few and public, and the writing
+// is the whole point, so they get the strongest model and more thinking.
+const RecapModel = anthropic.ModelClaudeOpus5_5
+
+// how is the model and effort for one kind of draft.
+type how struct {
+	model  anthropic.Model
+	effort anthropic.BetaOutputConfigEffort
+}
+
+var (
+	announcing = how{Model, anthropic.BetaOutputConfigEffortMedium}
+	recapping  = how{RecapModel, anthropic.BetaOutputConfigEffortHigh}
+)
+
 //go:embed announcement_examples.json
 var examplesFile []byte
 
@@ -113,22 +128,22 @@ func DraftFromNotes(ctx context.Context, notes string, examples []string) (strin
 
 // Write is an #announcements draft, cut to Discord's 2,000 characters.
 func Write(ctx context.Context, content []anthropic.BetaContentBlockParamUnion) (string, string) {
-	return write(ctx, System, content, 2000)
+	return write(ctx, announcing, System, content, 2000)
 }
 
 // write asks Claude with the given instructions: (text, "") or ("", why it
 // failed). The text is cut to limit characters.
-func write(ctx context.Context, system string, content []anthropic.BetaContentBlockParamUnion, limit int) (string, string) {
-	return send(ctx, system, []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(content...)}, limit)
+func write(ctx context.Context, h how, system string, content []anthropic.BetaContentBlockParamUnion, limit int) (string, string) {
+	return send(ctx, h, system, []anthropic.BetaMessageParam{anthropic.NewBetaUserMessage(content...)}, limit)
 }
 
 // send is write with a whole conversation (for revisions).
-func send(ctx context.Context, system string, messages []anthropic.BetaMessageParam, limit int) (string, string) {
+func send(ctx context.Context, h how, system string, messages []anthropic.BetaMessageParam, limit int) (string, string) {
 	client := anthropic.NewClient()
 	response, err := client.Beta.Messages.New(ctx, anthropic.BetaMessageNewParams{
-		Model:        Model,
+		Model:        h.model,
 		MaxTokens:    4000,
-		OutputConfig: anthropic.BetaOutputConfigParam{Effort: anthropic.BetaOutputConfigEffortMedium},
+		OutputConfig: anthropic.BetaOutputConfigParam{Effort: h.effort},
 		Betas:        []anthropic.AnthropicBeta{anthropic.AnthropicBetaServerSideFallback2026_07_01},
 		Fallbacks:    anthropic.BetaFallbacksParamOfDefault(),
 		System:       []anthropic.BetaTextBlockParam{{Text: system}},

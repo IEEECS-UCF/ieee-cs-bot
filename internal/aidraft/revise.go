@@ -14,6 +14,7 @@ import (
 // Thread is the conversation behind a draft. Revise returns a new Thread, so
 // a failed call leaves the old one as it was.
 type Thread struct {
+	how      how
 	System   string
 	Limit    int
 	Messages []anthropic.BetaMessageParam // the request, then draft, feedback, draft...
@@ -36,8 +37,8 @@ func assistant(text string) anthropic.BetaMessageParam {
 		Content: []anthropic.BetaContentBlockParamUnion{anthropic.NewBetaTextBlock(text)}}
 }
 
-func newThread(system string, limit int, request []anthropic.BetaContentBlockParamUnion, draft string) *Thread {
-	return &Thread{System: system, Limit: limit, Messages: []anthropic.BetaMessageParam{
+func newThread(h how, system string, limit int, request []anthropic.BetaContentBlockParamUnion, draft string) *Thread {
+	return &Thread{how: h, System: system, Limit: limit, Messages: []anthropic.BetaMessageParam{
 		anthropic.NewBetaUserMessage(request...),
 		assistant(draft),
 	}}
@@ -46,7 +47,7 @@ func newThread(system string, limit int, request []anthropic.BetaContentBlockPar
 // AnnouncementThread is an #announcements draft (Claude's or an officer's)
 // and what it was written from: Details for an event, FromNotes for notes.
 func AnnouncementThread(ask string, examples []string, draft string) *Thread {
-	return newThread(System, 2000, Prompt(examples, ask), draft)
+	return newThread(announcing, System, 2000, Prompt(examples, ask), draft)
 }
 
 // ReviseAsk is the turn that asks for a revision.
@@ -62,11 +63,11 @@ func ReviseAsk(feedback string) string {
 func Revise(ctx context.Context, t *Thread, feedback string) (*Thread, string) {
 	messages := append(append([]anthropic.BetaMessageParam{}, t.Messages...),
 		anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(ReviseAsk(feedback))))
-	text, why := send(ctx, t.System, messages, t.Limit)
+	text, why := send(ctx, t.how, t.System, messages, t.Limit)
 	if why != "" {
 		return nil, why
 	}
-	return &Thread{System: t.System, Limit: t.Limit,
+	return &Thread{how: t.how, System: t.System, Limit: t.Limit,
 		Messages: append(messages, assistant(text)),
 		Feedback: append(append([]string{}, t.Feedback...), feedback)}, ""
 }

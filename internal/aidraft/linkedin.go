@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -43,8 +44,8 @@ const LinkedInSystem = `You write LinkedIn posts for a university student chapte
 Write in the style of the example posts you're given: short and plain, with one nerdy line.
 
 The page post has exactly two short paragraphs before the link, like every example:
-1. What happened, in one or two sentences in the active voice. For a workshop or talk, start with who ran it ("Richard Hammingh ran our intro to Bash: ..."), then the big-picture takeaways after a colon ("the basics of embedded programming", not individual steps like "debouncing"). For a social or co-hosted event, or when the facts don't say who ran it, start with "We".
-2. The nerdy line on its own: one short joke or wink only a CS or hardware person would make, like the examples' "No one ran rm -rf /. We checked." or "Four clubs, one room, zero segfaults." No setup sentence before it. It must be obviously a joke or follow from the facts given. Never state an invented fact as true.
+1. What happened, in one or two sentences in the active voice. For a workshop or talk, start with who ran it ("Richard Hammingh ran our intro to Bash: ..."), then after a colon the two to four main things it covered, named concretely from the slides, plus what people built at the end if the slides or README say. Name topics, not steps: "picking a distro, installing it, and getting comfortable in the terminal" is right; "debouncing a button" is too narrow; "what Linux is", "the basics", "the commands worth knowing" and "how to use it" are too vague to say anything. For a social or co-hosted event, or when the facts don't say who ran it, start with "We".
+2. The nerdy line on its own: one short joke or wink only a CS or hardware person would make, like the examples' "No one ran rm -rf /. We checked." or "Four clubs, one room, zero segfaults." Build it from one specific detail in the slides or on Discord (a command, a gotcha, a demo, a slide's joke), not a general remark about the topic. One or two short sentences, no setup sentence before it. Never explain the joke, never end on a fragment like "Which is the whole point of bash.", and never claim what everyone did, felt or left with. It must be obviously a joke or follow from the facts given.
 - 150 to 450 characters before the link and hashtags.
 - No paragraph explaining what the topic is used for or why it matters.
 - Then the materials link on its own line if there is one, then three to five hashtags from this set only: #UCF #IEEE #ComputerArchitecture #EmbeddedSystems #GPU #HPC #SystemsProgramming #FPGA.
@@ -56,6 +57,7 @@ The presenter post, for whoever ran the event to put on their own LinkedIn profi
 - If you don't know who ran it, write it with [Name] where the name goes.
 
 Rules for both:
+- Name people the way the README, slides or Discord give their full name ("Richard Hammingh"), not by a username, handle, nickname or a shell prompt like "ricky@workshop".
 - Use only the facts given: the event's details, its slides and README, and the Discord messages. Never invent speakers, companies, results, quotes, numbers or what attendees did.
 - The slides and README, when given, are the best source for what the event covered and who presented it. Take the big-picture takeaways from them, not a list of every slide.
 - The Discord messages are the chapter's own server around the event's date: its announcement, its planning thread, the post sharing the materials, and chat. Use them to learn what the event covered, who ran or co-hosted it, and what people did. Some are about other events or are jokes; ignore those.
@@ -69,7 +71,9 @@ Reply in exactly this format, with nothing before or after:
 === PRESENTER POST ===
 <the presenter post>
 === TAG ===
-<the people, clubs and companies named in the posts, comma-separated, or "none">`
+<the people, clubs and companies named in the posts, comma-separated, or "none">
+=== OTHER LINES ===
+<two more nerdy lines the officer could swap in, built from different details, one per line>`
 
 // LinkedInInput is everything known about the event.
 type LinkedInInput struct {
@@ -129,13 +133,18 @@ func LinkedInExamplesText(page, presenter []string) string {
 // LinkedInDraft is the parsed reply.
 type LinkedInDraft struct {
 	Page, Presenter, Tag string
+	Lines                []string // other nerdy lines to swap in
 }
+
+var listMarker = regexp.MustCompile(`^\s*(?:[-*•]|\d+[.)])\s+`)
 
 // ParseLinkedIn splits Claude's reply into its three parts; ok is false if the
 // page post is missing.
 func ParseLinkedIn(reply string) (LinkedInDraft, bool) {
 	var d LinkedInDraft
-	sections := map[string]*string{"=== PAGE POST ===": &d.Page, "=== PRESENTER POST ===": &d.Presenter, "=== TAG ===": &d.Tag}
+	var others string
+	sections := map[string]*string{"=== PAGE POST ===": &d.Page, "=== PRESENTER POST ===": &d.Presenter, "=== TAG ===": &d.Tag,
+		"=== OTHER LINES ===": &others}
 	var current *string
 	var lines []string
 	flush := func() {
@@ -155,6 +164,11 @@ func ParseLinkedIn(reply string) (LinkedInDraft, bool) {
 	flush()
 	if strings.EqualFold(d.Tag, "none") {
 		d.Tag = ""
+	}
+	for _, line := range strings.Split(others, "\n") {
+		if line = strings.TrimSpace(listMarker.ReplaceAllString(line, "")); line != "" {
+			d.Lines = append(d.Lines, line)
+		}
 	}
 	return d, d.Page != ""
 }
@@ -183,12 +197,13 @@ func (d LinkedInDraft) Format() string {
 	if tag == "" {
 		tag = "none"
 	}
-	return "=== PAGE POST ===\n" + d.Page + "\n=== PRESENTER POST ===\n" + d.Presenter + "\n=== TAG ===\n" + tag
+	return "=== PAGE POST ===\n" + d.Page + "\n=== PRESENTER POST ===\n" + d.Presenter + "\n=== TAG ===\n" + tag +
+		"\n=== OTHER LINES ===\n" + strings.Join(d.Lines, "\n")
 }
 
 // LinkedInThread is a recap and what it was written from, to revise it.
 func LinkedInThread(in LinkedInInput, d LinkedInDraft) *Thread {
-	return newThread(LinkedInSystem, linkedinLimit, linkedinRequest(in), d.Format())
+	return newThread(recapping, LinkedInSystem, linkedinLimit, linkedinRequest(in), d.Format())
 }
 
 // LinkedInFrom reads a revised recap out of its thread: (draft, "") or why not.
@@ -204,13 +219,13 @@ func LinkedInFrom(t *Thread, materials string) (LinkedInDraft, string) {
 // DraftLinkedIn writes the page post and the presenter post for an event: (draft, "")
 // or (empty, why it failed).
 func DraftLinkedIn(ctx context.Context, in LinkedInInput) (LinkedInDraft, string) {
-	reply, why := write(ctx, LinkedInSystem, linkedinRequest(in), linkedinLimit)
+	reply, why := write(ctx, recapping, LinkedInSystem, linkedinRequest(in), linkedinLimit)
 	if strings.Contains(why, "(400)") && len(in.Slides) > 0 {
 		// Claude turned the request down, most likely the PDF (over 100
 		// pages, or damaged): write it from the README and Discord instead
 		log.Printf("LinkedIn recap: request with %s refused (%s); retrying without the slides", in.SlidesName, why)
 		in.Slides = nil
-		reply, why = write(ctx, LinkedInSystem, linkedinRequest(in), linkedinLimit)
+		reply, why = write(ctx, recapping, LinkedInSystem, linkedinRequest(in), linkedinLimit)
 	}
 	if why != "" {
 		return LinkedInDraft{}, why

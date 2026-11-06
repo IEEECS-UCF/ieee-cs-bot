@@ -138,3 +138,17 @@ func TestTheSlidesAndReadmeGoToClaude(t *testing.T) {
 		t.Error("the instructions don't point Claude at the slides")
 	}
 }
+
+func TestOtherNerdyLinesComeBackAsAList(t *testing.T) {
+	d, ok := ParseLinkedIn("=== PAGE POST ===\nRichard ran our intro to Bash.\n\nJoke.\n=== PRESENTER POST ===\nMe.\n=== TAG ===\nnone\n" +
+		"=== OTHER LINES ===\n- One space is the difference between rm -rf /hello and rm -rf / hello.\n2. 36 hours, zero typos.\n\n")
+	if !ok || len(d.Lines) != 2 || d.Lines[0] != "One space is the difference between rm -rf /hello and rm -rf / hello." ||
+		d.Lines[1] != "36 hours, zero typos." {
+		t.Errorf("%q", d.Lines)
+	}
+	for _, rule := range []string{"full name", "shell prompt", "Never explain the joke", "too vague", "=== OTHER LINES ==="} {
+		if !strings.Contains(LinkedInSystem, rule) {
+			t.Errorf("instructions lost %q", rule)
+		}
+	}
+}
