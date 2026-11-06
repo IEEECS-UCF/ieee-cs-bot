@@ -28,12 +28,36 @@ func TestParseLinkedInSplitsTheThreeParts(t *testing.T) {
 func TestLinkedInDetailsSayWhatsMissing(t *testing.T) {
 	start := time.Date(2026, 11, 5, 18, 30, 0, 0, time.UTC)
 	e := eventtext.Event{Name: "Bash Scripting Workshop", Start: start, End: start.Add(2 * time.Hour)}
-	got := LinkedInDetails(e, "", "Richard Hammingh", "", "")
+	got := LinkedInDetails(LinkedInInput{Event: e, RanBy: "Richard Hammingh"})
 	for _, want := range []string{"Name: Bash Scripting Workshop", "Thursday, November 5, 2026", "Room: (not given)",
-		"Ran it: Richard Hammingh", "Materials link: (none)", "Officer's notes on what happened: (none)", "already happened"} {
+		"Ran it: Richard Hammingh", "Materials link: (none)", "Officer's notes on what happened: (none)", "already happened",
+		"Discord messages about it: (none found)"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in %q", want, got)
 		}
+	}
+	got = LinkedInDetails(LinkedInInput{Event: e, Materials: "https://github.com/IEEECS-UCF/Bash",
+		Discord: []string{"#announcements · Ricky · 2026-11-01\nBash workshop Nov 5 in ENG2 205"}})
+	if !strings.Contains(got, "<message>\n#announcements · Ricky · 2026-11-01\nBash workshop Nov 5") ||
+		!strings.Contains(got, "Materials link: https://github.com/IEEECS-UCF/Bash") {
+		t.Errorf("%q", got)
+	}
+}
+
+func TestWithLinkAlwaysPutsTheMaterialsInThePost(t *testing.T) {
+	post := "Richard ran our intro to Bash.\n\nNo one ran rm -rf /. We checked.\n\n#UCF #IEEE"
+	got := WithLink(post, "https://github.com/IEEECS-UCF/Bash")
+	if got != "Richard ran our intro to Bash.\n\nNo one ran rm -rf /. We checked.\n\nSlides and code: github.com/IEEECS-UCF/Bash\n\n#UCF #IEEE" {
+		t.Errorf("%q", got)
+	}
+	if again := WithLink(got, "https://github.com/IEEECS-UCF/Bash"); again != got {
+		t.Errorf("added twice: %q", again)
+	}
+	if got := WithLink("Plain post", "https://docs.google.com/presentation/d/x"); got != "Plain post\n\nSlides and code: docs.google.com/presentation/d/x" {
+		t.Errorf("%q", got)
+	}
+	if got := WithLink(post, ""); got != post {
+		t.Errorf("%q", got)
 	}
 }
 

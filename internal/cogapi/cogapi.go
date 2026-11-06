@@ -49,3 +49,16 @@ type Officer interface {
 	// GeneralPost is the shared "General announcements" post.
 	GeneralPost() (*discordgo.Channel, error)
 }
+
+// Assistant is the /officer ask cog (internal/cogs/assistant): its cache of
+// every Discord message the bot can read.
+type Assistant interface {
+	// EventMessages is what was said on Discord about an event in the days
+	// around it, best matches first, at most limit.
+	EventMessages(name string, start time.Time, limit int) []Snippet
+}
+
+// Snippet is one cached Discord message (or conversation).
+type Snippet struct {
+	Place, Author, Day, Text, URL string
+}

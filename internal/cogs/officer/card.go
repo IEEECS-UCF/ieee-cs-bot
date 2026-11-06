@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"google.golang.org/api/calendar/v3"
 
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/aidraft"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/checkin"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/eventtext"
@@ -279,24 +281,43 @@ func (k *card) linkedinModal(e eventtext.Event) *botkit.Modal {
 	}, func(ctx *botkit.Ctx) { k.submitLinkedIn(ctx, e) })
 }
 
-// submitLinkedIn has Claude write the page post and the presenter's post. They
+// submitLinkedIn has Claude write the page post and the presenter's post, from
+// the event, the officer's notes and what was said about it on Discord. They
 // come back as copy blocks: LinkedIn doesn't let a bot post as a page.
 func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 	ctx.Defer(true)
-	materials := ""
+	linked := ""
 	if snap := k.cog.cache.WithStore(); snap != nil {
 		if s := snap.Slides[k.gid]; s != nil && s.URL != "" {
-			materials = s.URL
+			linked = s.URL
 		}
 	}
-	d, why := aiLinkedIn(e, eventtext.PlainDescription(e), ctx.Field("ran"), ctx.Field("notes"), materials)
+	snippets := eventMessages(k.cog.bot, e)
+	var discord []string
+	var found []string
+	for _, m := range snippets {
+		discord = append(discord, fmt.Sprintf("%s · %s · %s\n%s", m.Place, m.Author, m.Day, botkit.Cut(m.Text, 700)))
+		found = append(found, materialLinks(m.Text)...)
+	}
+	materials := pickMaterials(linked, found)
+	d, why := aiLinkedIn(aidraft.LinkedInInput{Event: e, Description: eventtext.PlainDescription(e), RanBy: ctx.Field("ran"),
+		Notes: ctx.Field("notes"), Materials: materials, Discord: discord})
 	if why != "" {
 		followup(ctx, why)
 		return
 	}
-	log.Printf("LinkedIn recap for %s written for %s", e.Name, who(ctx))
-	text := fmt.Sprintf("**LinkedIn recap for %s, written by Claude** (check every detail, then post it from the page by hand)"+
-		"\n**Page post**\n```\n%s\n```", e.Name, d.Page)
+	log.Printf("LinkedIn recap for %s written for %s (%d Discord messages)", e.Name, who(ctx), len(snippets))
+	source := fmt.Sprintf("read %d Discord message(s) about it", len(snippets))
+	if len(snippets) == 0 {
+		source = "found nothing about it on Discord, so it's from the event and your notes only"
+	}
+	if materials != "" {
+		source += "; materials: <" + materials + ">"
+	} else {
+		source += "; no slides or repo found (link them with **Link slides** and run it again)"
+	}
+	text := fmt.Sprintf("**LinkedIn recap for %s, written by Claude** (%s). Check every detail, then post it from the page by hand."+
+		"\n**Page post**\n```\n%s\n```", e.Name, source, d.Page)
 	if d.Presenter != "" {
 		text += fmt.Sprintf("\n**For the presenter's own profile** (the page reshares it)\n```\n%s\n```", d.Presenter)
 	}
@@ -305,6 +326,41 @@ func (k *card) submitLinkedIn(ctx *botkit.Ctx, e eventtext.Event) {
 	}
 	text += "\nOnce it's up, mark the recap step:"
 	ctx.Followup(botkit.Reply{Content: botkit.Cut(text, discordMessageLimit), Components: k.markButtons("recap"), Ephemeral: true})
+}
+
+var linkPattern = regexp.MustCompile(`https?://[^\s<>()\[\]"']+`)
+
+// materialLinks is the links in a message that could be an event's materials:
+// the chapter's GitHub, Google Slides, Docs and Drive.
+func materialLinks(text string) []string {
+	var out []string
+	for _, l := range linkPattern.FindAllString(text, -1) {
+		l = strings.TrimRight(l, ".,;:!?*_~`")
+		low := strings.ToLower(l)
+		if strings.Contains(low, "github.com/ieeecs-ucf/") || strings.Contains(low, "docs.google.com/presentation") ||
+			strings.Contains(low, "docs.google.com/document") || strings.Contains(low, "drive.google.com/") {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// pickMaterials is the link to put in the post: the one linked on the card,
+// else the chapter repo or slides shared on Discord, most-shared first.
+func pickMaterials(linked string, found []string) string {
+	if linked != "" {
+		return linked
+	}
+	counts := map[string]int{}
+	best := ""
+	for _, l := range found {
+		counts[l]++
+		if best == "" || counts[l] > counts[best] ||
+			(counts[l] == counts[best] && strings.Contains(strings.ToLower(l), "github.com") && !strings.Contains(strings.ToLower(best), "github.com")) {
+			best = l
+		}
+	}
+	return best
 }
 
 func (k *card) doCheckin(ctx *botkit.Ctx, e eventtext.Event) {

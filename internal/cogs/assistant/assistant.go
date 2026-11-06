@@ -764,3 +764,20 @@ func (v *confirmChanges) onTimeout() {
 		v.message.Edit(botkit.Edit{Content: &content, Components: botkit.Clear[discordgo.MessageComponent]()})
 	}
 }
+
+// EventMessages is cogapi.Assistant: messages and conversations that match an
+// event's name, from ten days before it to ten days after (the announcement,
+// its planning thread, the materials post afterwards, chat about it).
+func (c *Cog) EventMessages(name string, start time.Time, limit int) []cogapi.Snippet {
+	day := func(days int) string { return start.In(assistant.TZ()).AddDate(0, 0, days).Format("2006-01-02") }
+	hits, err := c.knowledge.SearchWith(name, assistant.Filter{Source: "discord", After: day(-10), Before: day(10)}, limit)
+	if err != nil {
+		log.Printf("Knowledge cache: couldn't search for %s: %v", name, err)
+		return nil
+	}
+	out := make([]cogapi.Snippet, 0, len(hits))
+	for _, h := range hits {
+		out = append(out, cogapi.Snippet{Place: h.Place, Author: h.Author, Day: assistant.LocalDay(h.TS), Text: h.Text, URL: h.URL})
+	}
+	return out
+}

@@ -97,8 +97,17 @@ var (
 	aiDraftFromNotes = func(notes string, examples []string) (string, string) {
 		return aidraft.DraftFromNotes(context.Background(), notes, examples)
 	}
-	aiLinkedIn = func(e eventtext.Event, description, ranBy, notes, materials string) (aidraft.LinkedInDraft, string) {
-		return aidraft.DraftLinkedIn(context.Background(), e, description, ranBy, notes, materials)
+	aiLinkedIn = func(in aidraft.LinkedInInput) (aidraft.LinkedInDraft, string) {
+		return aidraft.DraftLinkedIn(context.Background(), in)
+	}
+	// eventMessages is what Discord said about an event (the assistant cog's
+	// cache; nil if that cog isn't loaded)
+	eventMessages = func(b *botkit.Bot, e eventtext.Event) []cogapi.Snippet {
+		a, ok := b.Cog(cogapi.AssistantName).(cogapi.Assistant)
+		if !ok || a == nil {
+			return nil
+		}
+		return a.EventMessages(e.Name, e.Start, 25)
 	}
 	readAttachment = func(url string) ([]byte, error) {
 		resp, err := attachmentClient.Get(url)

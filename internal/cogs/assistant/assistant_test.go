@@ -111,3 +111,37 @@ func TestEveryQueuedChangeIsShownInFull(t *testing.T) {
 		t.Errorf("%d pieces", len(long))
 	}
 }
+
+// The LinkedIn recap asks for what Discord said about an event in the days
+// around it; messages about it from long before or after are left out.
+func TestEventMessagesAreTheOnesAroundTheEvent(t *testing.T) {
+	k, err := assistant.OpenKnowledge(t.TempDir() + "/k.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer k.Close()
+	day := func(d int) string {
+		return time.Date(2026, 11, d, 22, 0, 0, 0, time.UTC).Format("2006-01-02T15:04:05+00:00")
+	}
+	rows := []assistant.Row{
+		{Key: "discord:1", Source: "discord", Place: "#announcements", Author: "Ricky", TS: day(1), Text: "Bash workshop on Nov 5 in ENG2 205"},
+		{Key: "discord:2", Source: "discord", Place: "#announcements", Author: "Ricky", TS: day(7), Text: "Bash materials: https://github.com/IEEECS-UCF/Bash"},
+		{Key: "discord:3", Source: "discord", Place: "#general", Author: "Sam", TS: day(6), Text: "anyone want lunch"},
+	}
+	old := assistant.Row{Key: "discord:4", Source: "discord", Place: "#announcements", Author: "Old", TS: "2025-03-01T22:00:00+00:00",
+		Text: "Bash workshop last spring"}
+	if err := k.PutMessages(append(rows, old)); err != nil {
+		t.Fatal(err)
+	}
+	c := &Cog{knowledge: k}
+	got := c.EventMessages("Bash Scripting Workshop", time.Date(2026, 11, 5, 18, 30, 0, 0, time.UTC), 10)
+	var texts []string
+	for _, s := range got {
+		texts = append(texts, s.Day+" "+s.Text)
+	}
+	joined := strings.Join(texts, " | ")
+	if !strings.Contains(joined, "Nov 5 in ENG2 205") || !strings.Contains(joined, "IEEECS-UCF/Bash") ||
+		strings.Contains(joined, "lunch") || strings.Contains(joined, "last spring") {
+		t.Errorf("got %q", texts)
+	}
+}
