@@ -85,3 +85,33 @@ func TestLinkedInExamplesFollowTheChosenStyle(t *testing.T) {
 		t.Error("the instructions lost the style rules")
 	}
 }
+
+// The format check matches every chosen example, and catches the kind of
+// draft that drifted from them (Bash workshop, Nov 2026).
+func TestPageFormatProblemFitsTheExamples(t *testing.T) {
+	page, _ := LinkedInExamples()
+	for _, p := range page {
+		if problem := PageFormatProblem(p); problem != "" {
+			t.Errorf("example rejected (%s): %q", problem, p)
+		}
+	}
+	drifted := "Our Bash Scripting Workshop was run by Ricky. It covered what bash is, the basic commands worth knowing, " +
+		"and how to write your own scripts so a long workflow turns into a single command.\n\n" +
+		"Bash shows up everywhere in software development, from build scripts to the everyday tools that edit files and run code.\n\n" +
+		"Then we chained it all together. The shell did exactly what we said, which is not always what we meant.\n\n" +
+		"Slides and code: https://github.com/IEEECS-UCF/Bash-Basics-Workshop\n\n#UCF #IEEE #SystemsProgramming"
+	if problem := PageFormatProblem(drifted); !strings.Contains(problem, "has 3 paragraphs") {
+		t.Errorf("drifted draft: %q", problem)
+	}
+	passive := "Our Bash workshop was run by Ricky: terminals, pipes and scripts.\n\nNo one ran `rm -rf /`. We checked."
+	if problem := PageFormatProblem(passive); !strings.Contains(problem, "active voice") {
+		t.Errorf("passive: %q", problem)
+	}
+	long := strings.Repeat("word ", 100) + "\n\nJoke."
+	if problem := PageFormatProblem(long); !strings.Contains(problem, "under 450") {
+		t.Errorf("long: %q", problem)
+	}
+	if !strings.Contains(LinkedInSystem, "exactly two short paragraphs") {
+		t.Error("the instructions lost the two-paragraph rule")
+	}
+}

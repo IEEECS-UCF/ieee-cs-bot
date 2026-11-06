@@ -40,12 +40,13 @@ func LinkedInExamples() ([]string, []string) {
 const LinkedInSystem = `You write LinkedIn posts for a university student chapter, IEEE Computer Society at UCF (computer architecture, systems programming, GPUs and HPC, embedded, FPGAs).
 Write in the style of the example posts you're given: short and plain, with one nerdy line.
 
-The page post:
-- Two or three short paragraphs, roughly 250 to 600 characters before the link and hashtags.
-- Say what the event was and who ran it or co-hosted it, then the big-picture takeaways ("the basics of embedded programming", not individual steps like "debouncing").
-- Exactly one nerdy line: a short joke or wink only a CS or hardware person would make, like the examples' "(It's usually memory.)", "No one ran rm -rf /. We checked." or "Four clubs, one room, zero segfaults." It must be obviously a joke or follow from the facts given. Never state an invented fact as true.
+The page post has exactly two short paragraphs before the link, like every example:
+1. What happened, in one or two sentences in the active voice. For a workshop or talk, start with who ran it ("Richard Hammingh ran our intro to Bash: ..."), then the big-picture takeaways after a colon ("the basics of embedded programming", not individual steps like "debouncing"). For a social or co-hosted event, start with "We".
+2. The nerdy line on its own: one short joke or wink only a CS or hardware person would make, like the examples' "No one ran rm -rf /. We checked." or "Four clubs, one room, zero segfaults." No setup sentence before it. It must be obviously a joke or follow from the facts given. Never state an invented fact as true.
+- 150 to 450 characters before the link and hashtags.
+- No paragraph explaining what the topic is used for or why it matters.
 - Then the materials link on its own line if there is one, then three to five hashtags from this set only: #UCF #IEEE #ComputerArchitecture #EmbeddedSystems #GPU #HPC #SystemsProgramming #FPGA.
-- Never: hook openers, bullet lists, step-by-step details, lines about what the event "means", inspirational closers, more than one emoji, or any count of attendees, members or followers.
+- Never: hook openers, passive openers ("was run by"), bullet lists, step-by-step details, lines about what the event "means", inspirational closers, more than one emoji, or any count of attendees, members or followers.
 - No hype words: excited, thrilled, amazing, incredible, journey, delve, dive into, game-changer, cutting-edge, empower. No "it's not just X, it's Y".
 
 The presenter post, for whoever ran the event to put on their own LinkedIn profile:
@@ -191,8 +192,44 @@ func DraftLinkedIn(ctx context.Context, in LinkedInInput) (LinkedInDraft, string
 	if !ok {
 		return LinkedInDraft{}, "Claude's reply wasn't in the expected shape. Try again."
 	}
+	// Drafts sometimes drift from the examples' two paragraphs: ask for a
+	// fix once, and keep the first draft if the fix is no better.
+	if problem := PageFormatProblem(d.Page); problem != "" {
+		if next, why := Revise(ctx, LinkedInThread(in, d), problem); why == "" {
+			if fixed, ok := ParseLinkedIn(next.Draft()); ok && PageFormatProblem(fixed.Page) == "" {
+				d = fixed
+			}
+		}
+	}
 	d.Page = WithLink(d.Page, in.Materials)
 	return d, ""
+}
+
+// PageFormatProblem says how a page post breaks the examples' format (two
+// short paragraphs before the link and hashtags), or "" if it doesn't.
+func PageFormatProblem(page string) string {
+	var paragraphs []string
+	for _, p := range strings.Split(strings.TrimSpace(page), "\n\n") {
+		p = strings.TrimSpace(p)
+		low := strings.ToLower(p)
+		if p == "" || strings.HasPrefix(p, "#") || strings.Contains(low, "github.com/") || strings.Contains(low, "http") ||
+			strings.HasPrefix(low, "slides") {
+			continue // the materials link and the hashtags
+		}
+		paragraphs = append(paragraphs, p)
+	}
+	n := len([]rune(strings.Join(paragraphs, "\n\n")))
+	switch {
+	case len(paragraphs) != 2:
+		return fmt.Sprintf("The page post has %d paragraphs before the link. Use exactly two, like the examples: "+
+			"who ran it and the big-picture takeaways in one active sentence, then the nerdy line on its own. "+
+			"Drop anything explaining what the topic is used for.", len(paragraphs))
+	case n > 450:
+		return fmt.Sprintf("The page post is %d characters before the link. Keep it under 450, like the examples.", n)
+	case strings.Contains(strings.ToLower(paragraphs[0]), "was run by") || strings.Contains(strings.ToLower(paragraphs[0]), "were run by"):
+		return "Open in the active voice, like the examples: \"<name> ran our <event>: ...\", not \"was run by\"."
+	}
+	return ""
 }
 
 // WithLink makes sure a post has its materials link: if Claude left it out,
