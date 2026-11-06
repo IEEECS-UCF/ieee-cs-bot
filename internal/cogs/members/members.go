@@ -14,7 +14,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 
@@ -106,7 +105,7 @@ type Cog struct {
 	b *botkit.Bot
 
 	// What reaches Discord, swapped out in tests.
-	member        func(guildID string, userID int64) *discordgo.Member
+	member        func(guildID string, userID int64) (*discordgo.Member, error) // nil, nil: not in the server
 	addRole       func(guildID string, userID, roleID int64, reason string) error
 	reviewChannel func() string
 	postCard      func(channelID string, embed *discordgo.MessageEmbed, view []discordgo.MessageComponent) (*discordgo.Message, error)
@@ -119,18 +118,15 @@ type chunkCount struct{ seen, added int }
 
 func newCog(b *botkit.Bot) *Cog {
 	c := &Cog{b: b, chunks: map[string]*chunkCount{}}
-	c.member = func(guildID string, userID int64) *discordgo.Member {
+	c.member = func(guildID string, userID int64) (*discordgo.Member, error) {
 		if m, err := b.S.State.Member(guildID, botkit.S(userID)); err == nil {
-			return m
+			return m, nil
 		}
 		m, err := b.S.GuildMember(guildID, botkit.S(userID))
 		if botkit.IsNotFound(err) {
-			return nil
+			return nil, nil
 		}
-		if err != nil {
-			panic(err)
-		}
-		return m
+		return m, err
 	}
 	c.addRole = func(guildID string, userID, roleID int64, reason string) error {
 		return b.S.GuildMemberRoleAdd(guildID, botkit.S(userID), botkit.S(roleID), discordgo.WithAuditLogReason(reason))
@@ -201,11 +197,18 @@ func (c *Cog) onReview(ix interaction, action string, userID int64) {
 	}
 	user := ix.User()
 	note := ""
+	// Look them up first: a Discord hiccup here used to leave them verified
+	// with no role, and nobody could press Approve again
+	member, err := c.member(ix.GuildID(), userID)
+	if err != nil {
+		ix.Ephemeral(fmt.Sprintf("Couldn't look them up on Discord (%s). Nothing was changed; try again.", httpText(err)))
+		return
+	}
 	// Decide before giving the role: the role update comes back as a member
 	// update, which would otherwise record it as a role added by hand
 	before := *record
 	record = members.Decide(userID, "verified", botkit.ID(user.ID), "")
-	if member := c.member(ix.GuildID(), userID); member == nil {
+	if member == nil {
 		note = " They're no longer in the server, so no role was given."
 	} else if err := c.addRole(ix.GuildID(), userID, DuesPayingRoleID, "IEEE membership verified by "+user.String()); err != nil {
 		members.Change(userID, func(*members.Record) *members.Record { return &before })
@@ -266,7 +269,7 @@ func (c *Cog) verify(ix interaction) {
 		members.Recognize(userID, false)
 	}
 	record := members.Get(userID)
-	year := time.Now().Year()
+	year := members.Now().Year()
 	if record != nil && record.Status == "pending" {
 		ix.Ephemeral("Your request is already waiting for an officer. 🙂")
 		return
@@ -284,7 +287,7 @@ func (c *Cog) status(ix interaction) {
 		members.Recognize(userID, false)
 	}
 	record := members.Get(userID)
-	year := time.Now().Year()
+	year := members.Now().Year()
 	var text string
 	switch {
 	case record == nil:
