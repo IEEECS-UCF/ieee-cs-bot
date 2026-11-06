@@ -237,9 +237,11 @@ func Setup(b *botkit.Bot) {
 	b.Route(`task:(?P<action>claim|unclaim):(?P<id>[0-9a-f]+)`, press)
 }
 
-// click applies a press to the stored task. ok is false when the task is
-// missing or closed.
-func click(taskID, action string, user int64) (task *Task, note string, ok bool, err error) {
+// click applies a press to the stored task, then calls show (if not nil) with
+// it while still holding the file's lock, so two quick presses update the
+// board in the order they were saved and the later one is what stays shown.
+// ok is false when the task is missing or closed.
+func click(taskID, action string, user int64, show func(*Task)) (task *Task, note string, ok bool, err error) {
 	unlock := store.Lock(TasksFile)
 	defer unlock()
 	tasks := LoadTasks()
@@ -267,12 +269,22 @@ func click(taskID, action string, user int64) (task *Task, note string, ok bool,
 			note = "You weren't signed up."
 		}
 	}
-	return task, note, true, SaveTasks(tasks)
+	if err := SaveTasks(tasks); err != nil {
+		return task, note, true, err
+	}
+	if show != nil {
+		show(task)
+	}
+	return task, note, true, nil
 }
 
 func press(c *botkit.Ctx, m map[string]string) {
 	user := c.UserID()
-	task, note, ok, err := click(m["id"], m["action"], user)
+	var shown error
+	task, note, ok, err := click(m["id"], m["action"], user, func(task *Task) {
+		components := TaskComponents(task)
+		shown = c.Update(botkit.Edit{Embeds: &[]*discordgo.MessageEmbed{TaskEmbed(task)}, Components: &components})
+	})
 	if err != nil {
 		c.Fail(err)
 		return
@@ -281,9 +293,8 @@ func press(c *botkit.Ctx, m map[string]string) {
 		c.Ephemeral("This task is closed.")
 		return
 	}
-	components := TaskComponents(task)
-	if err := c.Update(botkit.Edit{Embeds: &[]*discordgo.MessageEmbed{TaskEmbed(task)}, Components: &components}); err != nil {
-		log.Printf("Task %s: could not update the board message: %v", task.Title, err)
+	if shown != nil {
+		log.Printf("Task %s: could not update the board message: %v", task.Title, shown)
 		return
 	}
 	if _, err := c.Followup(botkit.Reply{Content: note, Ephemeral: true}); err != nil {

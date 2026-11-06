@@ -4,6 +4,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
@@ -28,7 +29,7 @@ func TestClaimFillsSpotsAndDisables(t *testing.T) {
 	save(t, task)
 	var note string
 	for _, user := range []int64{10, 11, 12} {
-		_, note, _, _ = click(task.ID, "claim", user)
+		_, note, _, _ = click(task.ID, "claim", user, nil)
 	}
 	saved := LoadTasks().Get(task.ID)
 	if !slices.Equal(saved.Claimed, []int64{10, 11}) {
@@ -43,12 +44,43 @@ func TestClaimFillsSpotsAndDisables(t *testing.T) {
 	}
 }
 
+// Presses at the same moment show the board in the order they were saved,
+// so the last board shown is what tasks.json holds.
+func TestSimultaneousClaimsShowTheLastSave(t *testing.T) {
+	testutil.Setup(t)
+	task := NewTask("Table at the fair", "Fri 3-5", "", 20, 0, "")
+	save(t, task)
+	var mu sync.Mutex
+	var shown []int
+	var wg sync.WaitGroup
+	for user := range int64(20) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			click(task.ID, "claim", 100+user, func(t *Task) {
+				mu.Lock()
+				shown = append(shown, len(t.Claimed))
+				mu.Unlock()
+			})
+		}()
+	}
+	wg.Wait()
+	for i, n := range shown {
+		if n != i+1 {
+			t.Fatalf("boards shown out of order: %v", shown)
+		}
+	}
+	if got := len(LoadTasks().Get(task.ID).Claimed); got != 20 {
+		t.Errorf("saved %d claims", got)
+	}
+}
+
 func TestUnclaimFreesASpot(t *testing.T) {
 	testutil.Setup(t)
 	task := NewTask("Setup", "", "", 1, 0, "")
 	task.Claimed = []int64{10}
 	save(t, task)
-	click(task.ID, "unclaim", 10)
+	click(task.ID, "unclaim", 10, nil)
 	if got := LoadTasks().Get(task.ID).Claimed; len(got) != 0 {
 		t.Errorf("claimed %v", got)
 	}
@@ -59,7 +91,7 @@ func TestClosedTaskRefuses(t *testing.T) {
 	task := NewTask("Old", "", "", 1, 0, "")
 	task.Open = false
 	save(t, task)
-	if _, _, ok, _ := click(task.ID, "claim", 10); ok {
+	if _, _, ok, _ := click(task.ID, "claim", 10, nil); ok {
 		t.Error("claimed a closed task")
 	}
 }
