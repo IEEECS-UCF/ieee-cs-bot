@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -21,7 +20,8 @@ import (
 // profile (members' own posts reach far more people; the page reshares them).
 // Nothing posts by itself: LinkedIn doesn't let a bot post as a page, so an
 // officer copies them. The style was chosen by the chair on Nov 6, 2026:
-// short, plain, one nerdy line, no headcounts. See linkedin_examples.json.
+// a thank-you, one plain sentence, the link; no jokes or headcounts (Nov 8).
+// See linkedin_examples.json.
 
 //go:embed linkedin_examples.json
 var linkedinFile []byte
@@ -41,19 +41,19 @@ func LinkedInExamples() ([]string, []string) {
 }
 
 const LinkedInSystem = `You write LinkedIn posts for a university student chapter, IEEE Computer Society at UCF (computer architecture, systems programming, GPUs and HPC, embedded, FPGAs).
-Write in the style of the example posts you're given: short and plain, with one nerdy line.
+Write in the style of the example posts you're given: a thank-you first, then one plain sentence. No jokes.
 
-The page post has exactly two short paragraphs before the link, like every example:
-1. What happened, in one or two sentences in the active voice. For a workshop or talk, start with who ran it ("Richard Hammingh ran our intro to Bash: ..."), then after a colon the two to four main things it covered, named concretely from the slides, plus what people built at the end if the slides or README say. Name topics, not steps: "picking a distro, installing it, and getting comfortable in the terminal" is right; "debouncing a button" is too narrow; "what Linux is", "the basics", "the commands worth knowing" and "how to use it" are too vague to say anything. For a social or co-hosted event, or when the facts don't say who ran it, start with "We".
-2. The nerdy line on its own: one short joke or wink only a CS or hardware person would make, like the examples' "No one ran rm -rf /. We checked." or "Four clubs, one room, zero segfaults." Build it from one specific detail in the slides or on Discord (a command, a gotcha, a demo, a slide's joke), not a general remark about the topic. One or two short sentences, no setup sentence before it. Never explain the joke, never end on a fragment like "Which is the whole point of bash.", and never claim what everyone did, felt or left with. It must be obviously a joke or follow from the facts given.
-- 150 to 450 characters before the link and hashtags.
-- No paragraph explaining what the topic is used for or why it matters.
+The page post has three short parts, like every example:
+1. A thank-you line: "Thanks to <who ran it> for running our <event>!" For a co-hosted event or a social, thank the co-hosts. If the facts don't say who ran it, thank everyone who came out.
+2. One plain sentence starting with "We" on what was covered or what people did, e.g. "We went through variables, loops, functions and pipes, and wrote a script to clean up a Downloads folder." Name the two to four main topics from the slides and anything people built. Not every step, and nothing vague like "what X is", "the basics" or "the commands worth knowing".
+3. The materials link and the hashtags (below).
+- Nothing else: no joke, no second sentence about what the topic is used for, under 350 characters before the link and hashtags.
 - Then the materials link on its own line if there is one, then three to five hashtags from this set only: #UCF #IEEE #ComputerArchitecture #EmbeddedSystems #GPU #HPC #SystemsProgramming #FPGA.
-- Never: hook openers, passive openers ("was run by"), bullet lists, step-by-step details, lines about what the event "means", inspirational closers, more than one emoji, or any count of attendees, members or followers.
+- Never: hook openers, passive voice ("was run by"), bullet lists, step-by-step details, lines about what the event "means", inspirational closers, more than one emoji, or any count of attendees, members or followers.
 - No hype words: excited, thrilled, amazing, incredible, journey, delve, dive into, game-changer, cutting-edge, empower. No "it's not just X, it's Y".
 
 The presenter post, for whoever ran the event to put on their own LinkedIn profile:
-- First person, three to five plain sentences: what they ran and for whom (IEEE Computer Society at UCF), the one idea they most wanted people to leave with, the materials link if any, and a short thanks.
+- First person, three or four plain sentences, like the examples: what they ran and for whom (IEEE Computer Society at UCF), the same plain line on what was covered, the materials link if any ("Slides are at <link> if you want to try it."), and "Thanks to everyone who came!"
 - If you don't know who ran it, write it with [Name] where the name goes.
 
 Rules for both:
@@ -71,9 +71,7 @@ Reply in exactly this format, with nothing before or after:
 === PRESENTER POST ===
 <the presenter post>
 === TAG ===
-<the people, clubs and companies named in the posts, comma-separated, or "none">
-=== OTHER LINES ===
-<two more nerdy lines the officer could swap in, built from different details, one per line>`
+<the people, clubs and companies named in the posts, comma-separated, or "none">`
 
 // LinkedInInput is everything known about the event.
 type LinkedInInput struct {
@@ -133,18 +131,13 @@ func LinkedInExamplesText(page, presenter []string) string {
 // LinkedInDraft is the parsed reply.
 type LinkedInDraft struct {
 	Page, Presenter, Tag string
-	Lines                []string // other nerdy lines to swap in
 }
-
-var listMarker = regexp.MustCompile(`^\s*(?:[-*•]|\d+[.)])\s+`)
 
 // ParseLinkedIn splits Claude's reply into its three parts; ok is false if the
 // page post is missing.
 func ParseLinkedIn(reply string) (LinkedInDraft, bool) {
 	var d LinkedInDraft
-	var others string
-	sections := map[string]*string{"=== PAGE POST ===": &d.Page, "=== PRESENTER POST ===": &d.Presenter, "=== TAG ===": &d.Tag,
-		"=== OTHER LINES ===": &others}
+	sections := map[string]*string{"=== PAGE POST ===": &d.Page, "=== PRESENTER POST ===": &d.Presenter, "=== TAG ===": &d.Tag}
 	var current *string
 	var lines []string
 	flush := func() {
@@ -164,11 +157,6 @@ func ParseLinkedIn(reply string) (LinkedInDraft, bool) {
 	flush()
 	if strings.EqualFold(d.Tag, "none") {
 		d.Tag = ""
-	}
-	for _, line := range strings.Split(others, "\n") {
-		if line = strings.TrimSpace(listMarker.ReplaceAllString(line, "")); line != "" {
-			d.Lines = append(d.Lines, line)
-		}
 	}
 	return d, d.Page != ""
 }
@@ -197,8 +185,7 @@ func (d LinkedInDraft) Format() string {
 	if tag == "" {
 		tag = "none"
 	}
-	return "=== PAGE POST ===\n" + d.Page + "\n=== PRESENTER POST ===\n" + d.Presenter + "\n=== TAG ===\n" + tag +
-		"\n=== OTHER LINES ===\n" + strings.Join(d.Lines, "\n")
+	return "=== PAGE POST ===\n" + d.Page + "\n=== PRESENTER POST ===\n" + d.Presenter + "\n=== TAG ===\n" + tag
 }
 
 // LinkedInThread is a recap and what it was written from, to revise it.
@@ -247,8 +234,9 @@ func DraftLinkedIn(ctx context.Context, in LinkedInInput) (LinkedInDraft, string
 	return d, ""
 }
 
-// PageFormatProblem says how a page post breaks the examples' format (two
-// short paragraphs before the link and hashtags), or "" if it doesn't.
+// PageFormatProblem says how a page post breaks the examples' format (a
+// thank-you line, then one plain sentence, before the link and hashtags), or
+// "" if it doesn't.
 func PageFormatProblem(page string) string {
 	var paragraphs []string
 	for _, p := range strings.Split(strings.TrimSpace(page), "\n\n") {
@@ -264,12 +252,11 @@ func PageFormatProblem(page string) string {
 	switch {
 	case len(paragraphs) != 2:
 		return fmt.Sprintf("The page post has %d paragraphs before the link. Use exactly two, like the examples: "+
-			"who ran it and the big-picture takeaways in one active sentence, then the nerdy line on its own. "+
-			"Drop anything explaining what the topic is used for.", len(paragraphs))
-	case n > 450:
-		return fmt.Sprintf("The page post is %d characters before the link. Keep it under 450, like the examples.", n)
-	case strings.Contains(strings.ToLower(paragraphs[0]), "was run by") || strings.Contains(strings.ToLower(paragraphs[0]), "were run by"):
-		return "Open in the active voice, like the examples: \"<name> ran our <event>: ...\", not \"was run by\"."
+			"\"Thanks to <who ran it> for running our <event>!\", then one plain sentence starting with \"We\". No joke.", len(paragraphs))
+	case !strings.HasPrefix(paragraphs[0], "Thanks to "):
+		return "Start the page post with the thank-you line, like the examples: \"Thanks to <who ran it> for running our <event>!\""
+	case n > 350:
+		return fmt.Sprintf("The page post is %d characters before the link. Keep it under 350, like the examples.", n)
 	}
 	return ""
 }

@@ -356,12 +356,6 @@ func (r *recap) text() string {
 	if d.Tag != "" {
 		text += "\n**Tag:** " + d.Tag
 	}
-	if len(d.Lines) > 0 {
-		text += "\n**Other nerdy lines to swap in:**"
-		for _, l := range d.Lines {
-			text += "\n- " + l
-		}
-	}
 	text += "\nNot right? **Revise with AI** and say what to change. Once it's up, mark the recap step:"
 	return botkit.Cut(text, discordMessageLimit)
 }

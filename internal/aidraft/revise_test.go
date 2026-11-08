@@ -60,7 +60,6 @@ func TestALinkedInRecapRoundTripsThroughItsThread(t *testing.T) {
 	if _, why := LinkedInFrom(th, ""); why == "" {
 		t.Error("a reply out of format was accepted")
 	}
-	d.Lines = []string{"36 hours of bash.", "One space matters."}
 	if back, ok := ParseLinkedIn(d.Format()); !ok || !reflect.DeepEqual(back, d) {
 		t.Errorf("format round trip %+v", back)
 	}

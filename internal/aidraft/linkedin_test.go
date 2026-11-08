@@ -80,7 +80,7 @@ func TestLinkedInExamplesFollowTheChosenStyle(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(LinkedInSystem, "any count of attendees") || !strings.Contains(LinkedInSystem, "one nerdy line") {
+	if !strings.Contains(LinkedInSystem, "any count of attendees") || !strings.Contains(LinkedInSystem, "a thank-you first") {
 		t.Error("the instructions lost the style rules")
 	}
 }
@@ -102,16 +102,14 @@ func TestPageFormatProblemFitsTheExamples(t *testing.T) {
 	if problem := PageFormatProblem(drifted); !strings.Contains(problem, "has 3 paragraphs") {
 		t.Errorf("drifted draft: %q", problem)
 	}
-	passive := "Our Bash workshop was run by Ricky: terminals, pipes and scripts.\n\nNo one ran `rm -rf /`. We checked."
-	if problem := PageFormatProblem(passive); !strings.Contains(problem, "active voice") {
-		t.Errorf("passive: %q", problem)
+	// The old shape (who ran it, then a joke) isn't the format anymore
+	old := "Richard Hammingh ran our intro to Bash: terminals, pipes and scripts.\n\nNo one ran `rm -rf /`. We checked."
+	if problem := PageFormatProblem(old); !strings.Contains(problem, "thank-you line") {
+		t.Errorf("old shape: %q", problem)
 	}
-	long := strings.Repeat("word ", 100) + "\n\nJoke."
-	if problem := PageFormatProblem(long); !strings.Contains(problem, "under 450") {
+	long := "Thanks to Richard Hammingh for running our intro to Bash!\n\nWe " + strings.Repeat("word ", 70)
+	if problem := PageFormatProblem(long); !strings.Contains(problem, "under 350") {
 		t.Errorf("long: %q", problem)
-	}
-	if !strings.Contains(LinkedInSystem, "exactly two short paragraphs") {
-		t.Error("the instructions lost the two-paragraph rule")
 	}
 }
 
@@ -139,16 +137,13 @@ func TestTheSlidesAndReadmeGoToClaude(t *testing.T) {
 	}
 }
 
-func TestOtherNerdyLinesComeBackAsAList(t *testing.T) {
-	d, ok := ParseLinkedIn("=== PAGE POST ===\nRichard ran our intro to Bash.\n\nJoke.\n=== PRESENTER POST ===\nMe.\n=== TAG ===\nnone\n" +
-		"=== OTHER LINES ===\n- One space is the difference between rm -rf /hello and rm -rf / hello.\n2. 36 hours, zero typos.\n\n")
-	if !ok || len(d.Lines) != 2 || d.Lines[0] != "One space is the difference between rm -rf /hello and rm -rf / hello." ||
-		d.Lines[1] != "36 hours, zero typos." {
-		t.Errorf("%q", d.Lines)
-	}
-	for _, rule := range []string{"full name", "shell prompt", "Never explain the joke", "too vague", "=== OTHER LINES ==="} {
-		if !strings.Contains(LinkedInSystem, rule) {
+func TestTheInstructionsAreThankYouFirst(t *testing.T) {
+	for _, rule := range []string{"Thanks to <who ran it> for running our <event>!", "No jokes", "full name", "shell prompt", "too vague"} {
+		if !strings.Contains(LinkedInSystem, rule) && !strings.Contains(LinkedInSystem, strings.ReplaceAll(rule, "too vague", "nothing vague")) {
 			t.Errorf("instructions lost %q", rule)
 		}
+	}
+	if strings.Contains(LinkedInSystem, "OTHER LINES") || strings.Contains(LinkedInSystem, "nerdy") {
+		t.Error("the instructions still ask for a joke line")
 	}
 }
