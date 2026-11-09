@@ -286,7 +286,8 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 			}
 			result, err := a.Tool(block.Name, block.Input)
 			if err != nil { // a tool failing shouldn't end the answer
-				result = "Error: " + err.Error()
+				log.Printf("/officer ask: tool %s failed: %s", block.Name, truncateLog(err.Error(), 500))
+				result = ToolErrorText(err)
 			}
 			results = append(results, anthropic.NewBetaToolResultBlock(block.ID, result, err != nil))
 		}

@@ -16,7 +16,9 @@ Notion.
 - `config/deadlines.json`: chapter deadlines kept in the repo.
 - `internal/aidraft/announcement_examples.json`: the announcements AI drafts copy the style of.
 - `apps_script/`: the check-in form's Apps Script.
-- `scripts/drive_login.py`: the one-time Google sign-in for Drive.
+- `scripts/drive_login.py`: the one-time Google sign-in for Drive. Its OAuth
+  client is in the Google Cloud project `ieee-cs-discord-bot`, which must have
+  the Drive, Docs, Sheets, Slides and Forms APIs turned on.
 - `GO_PORT.md`: how the bot was ported from the original Python version.
 
 ## Running and testing
