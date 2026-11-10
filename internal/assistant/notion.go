@@ -38,15 +38,29 @@ var notion = struct {
 	configured       func() bool
 	search           func(query, kind string) ([]notionHit, error)
 	readPage         func(pageID string) (notionPage, error)
-	queryDatabase    func(databaseID, filterText string) (title string, schema []kv, rows []string, err error)
+	queryDatabase    func(databaseID, filterText, sortBy string, descending bool) (title string, schema []kv, rows []string, err error)
 	changedPages     func(seen map[string]string) ([]Page, map[string]bool, error)
 	createPage       func(parentID, parentKind, title, text string, properties []kv) (string, error)
 	appendText       func(pageID, text string) error
 	updateProperties func(pageID string, values []kv) error
 	archive          func(pageID string) error
 	addFile          func(pageID string, data []byte, filename, contentType, caption string) error
+	// notion_more.go
+	pageInfo       func(pageID string) (notionPageInfo, error)
+	columns        func(databaseID string) ([]notionColumn, string, error)
+	createDatabase func(parentID string, spec notionDatabaseSpec) (string, error)
+	updateDatabase func(databaseID string, change notionDatabaseChange) error
+	replaceText    func(pageID, find, replace string) (int, error)
+	insertText     func(pageID, after, text string) error
+	comments       func(pageID string) ([]string, error)
+	addComment     func(pageID, text string) error
+	restore        func(pageID string) error
+	move           func(pageID, parentID string) error
+	setTodo        func(pageID, text string, checked bool) (string, error)
 }{notionConfigured, notionSearch, notionReadPage, notionQueryDatabase, notionChangedPages, notionCreatePage,
-	notionAppendText, notionUpdateProperties, notionArchive, notionAddFile}
+	notionAppendText, notionUpdateProperties, notionArchive, notionAddFile,
+	notionGetPageInfo, notionColumns, notionCreateDatabase, notionUpdateDatabase, notionReplaceText, notionInsertText,
+	notionComments, notionAddComment, notionRestore, notionMove, notionSetTodo}
 
 // notionDo sends one HTTP request to Notion and notionSleep paces them; tests
 // swap both.
@@ -131,6 +145,20 @@ func plain(rich any) string {
 	return b.String()
 }
 
+// plainLinks is rich text as plain text, with each link's address after it.
+func plainLinks(rich any) string {
+	var b strings.Builder
+	for _, t := range asList(rich) {
+		piece := asObj(t)
+		text, href := asStr(piece.get("plain_text")), asStr(piece.get("href"))
+		b.WriteString(text)
+		if href != "" && href != text && strings.HasPrefix(href, "http") {
+			b.WriteString(" (" + href + ")")
+		}
+	}
+	return b.String()
+}
+
 func titleOf(o *jobj) string {
 	if asStr(o.get("object")) == "database" {
 		return or(plain(o.get("title")), "Untitled")
@@ -193,7 +221,7 @@ func notionBlockLines(blockID string, depth int) ([]string, error) {
 			block := asObj(item)
 			kind := asStr(block.get("type"))
 			content := asObj(block.get(kind))
-			text := plain(content.get("rich_text"))
+			text := plainLinks(content.get("rich_text"))
 			switch kind {
 			case "child_page":
 				text = fmt.Sprintf("[page: %s] (id %s)", asStr(content.get("title")), asStr(block.get("id")))
@@ -208,7 +236,7 @@ func notionBlockLines(blockID string, depth int) ([]string, error) {
 			case "table_row":
 				var cells []string
 				for _, cell := range asList(content.get("cells")) {
-					cells = append(cells, plain(cell))
+					cells = append(cells, plainLinks(cell))
 				}
 				text = strings.Join(cells, " | ")
 			case "image", "file", "pdf":
@@ -254,29 +282,42 @@ func notionReadPage(pageID string) (notionPage, error) {
 
 // notionDatabaseSchema is the database's columns (name to type, in order) and title.
 func notionDatabaseSchema(databaseID string) ([]kv, string, error) {
-	db, err := notionCall("GET", "/databases/"+databaseID, nil)
+	columns, title, err := notionColumns(databaseID)
 	if err != nil {
 		return nil, "", err
 	}
-	props := asObj(db.get("properties"))
 	var schema []kv
-	for _, name := range props.keys {
-		schema = append(schema, kv{name, asStr(asObj(props.get(name)).get("type"))})
+	for _, c := range columns {
+		schema = append(schema, kv{c.Name, c.Type})
 	}
-	return schema, titleOf(db), nil
+	return schema, title, nil
 }
 
 // notionQueryDatabase is the rows as text lines, optionally only rows whose
-// text contains filterText.
-func notionQueryDatabase(databaseID, filterText string) (string, []kv, []string, error) {
+// text contains filterText, sorted by a column if sortBy names one.
+func notionQueryDatabase(databaseID, filterText, sortBy string, descending bool) (string, []kv, []string, error) {
 	schema, title, err := notionDatabaseSchema(databaseID)
 	if err != nil {
 		return "", nil, nil, err
+	}
+	var sorts []any
+	if sortBy != "" {
+		if _, ok := lookup(schema, sortBy); !ok {
+			return "", nil, nil, fmt.Errorf("no column named %s; it has %s", pyRepr(sortBy), columnNames(schema))
+		}
+		direction := "ascending"
+		if descending {
+			direction = "descending"
+		}
+		sorts = []any{map[string]any{"property": sortBy, "direction": direction}}
 	}
 	var rows []string
 	cursor := ""
 	for len(rows) < 200 {
 		body := map[string]any{"page_size": 100}
+		if sorts != nil {
+			body["sorts"] = sorts
+		}
 		if cursor != "" {
 			body["start_cursor"] = cursor
 		}
@@ -291,7 +332,7 @@ func notionQueryDatabase(databaseID, filterText string) (string, []kv, []string,
 			for _, name := range props.keys {
 				cells = append(cells, name+": "+propertyText(props.get(name)))
 			}
-			line := asStr(page.get("id")) + " | " + strings.Join(cells, " | ")
+			line := asStr(page.get("id")) + " | " + strings.Join(cells, " | ") + " | edited " + botkit.Cut(asStr(page.get("last_edited_time")), 10)
 			if strings.Contains(strings.ToLower(line), strings.ToLower(filterText)) {
 				rows = append(rows, line)
 			}
@@ -309,8 +350,10 @@ func propertyText(prop any) string {
 	kind := asStr(p.get("type"))
 	value := p.get(kind)
 	switch kind {
-	case "title", "rich_text":
+	case "title":
 		return plain(value)
+	case "rich_text":
+		return plainLinks(value)
 	case "select", "status":
 		return asStr(asObj(value).get("name"))
 	case "multi_select":
@@ -320,12 +363,7 @@ func propertyText(prop any) string {
 		}
 		return strings.Join(names, ", ")
 	case "date":
-		d := asObj(value)
-		text := asStr(d.get("start"))
-		if end := asStr(d.get("end")); end != "" {
-			text += " to " + end
-		}
-		return text
+		return dateText(asObj(value))
 	case "number", "checkbox", "url", "email", "phone_number":
 		if value == nil {
 			return ""
@@ -334,18 +372,87 @@ func propertyText(prop any) string {
 	case "people":
 		var names []string
 		for _, v := range asList(value) {
-			person := asObj(v)
-			if name, ok := person.vals["name"]; ok {
-				names = append(names, pyStr(name))
-			} else {
-				names = append(names, asStr(person.get("id")))
-			}
+			names = append(names, personName(asObj(v)))
 		}
 		return strings.Join(names, ", ")
+	case "created_by", "last_edited_by":
+		return personName(asObj(value))
 	case "created_time", "last_edited_time":
 		return asStr(value)
+	case "relation": // linked rows, by id (read_notion_page gives a row's title)
+		var ids []string
+		for _, v := range asList(value) {
+			ids = append(ids, asStr(asObj(v).get("id")))
+		}
+		return strings.Join(ids, ", ")
+	case "formula": // {"type": "number", "number": 3}
+		f := asObj(value)
+		result := asStr(f.get("type"))
+		if result == "date" {
+			return dateText(asObj(f.get("date")))
+		}
+		if v := f.get(result); v != nil {
+			return pyStr(v)
+		}
+		return ""
+	case "rollup":
+		r := asObj(value)
+		switch result := asStr(r.get("type")); result {
+		case "array": // each item is a property value of its own
+			var parts []string
+			for _, item := range asList(r.get("array")) {
+				if text := propertyText(item); text != "" {
+					parts = append(parts, text)
+				}
+			}
+			return strings.Join(parts, ", ")
+		case "date":
+			return dateText(asObj(r.get("date")))
+		default:
+			if v := r.get(result); v != nil {
+				return pyStr(v)
+			}
+		}
+		return ""
+	case "files":
+		var names []string
+		for _, v := range asList(value) {
+			names = append(names, asStr(asObj(v).get("name")))
+		}
+		return strings.Join(names, ", ")
+	case "unique_id":
+		u := asObj(value)
+		if u.get("number") == nil {
+			return ""
+		}
+		if prefix := asStr(u.get("prefix")); prefix != "" {
+			return prefix + "-" + pyStr(u.get("number"))
+		}
+		return pyStr(u.get("number"))
+	case "verification":
+		return asStr(asObj(value).get("state"))
 	}
 	return ""
+}
+
+func dateText(d *jobj) string {
+	text := asStr(d.get("start"))
+	if end := asStr(d.get("end")); end != "" {
+		text += " to " + end
+	}
+	return text
+}
+
+// personName is a Notion user's name, or their id when the connection can't
+// see names.
+func personName(person *jobj) string {
+	if person == nil {
+		return ""
+	}
+	if name, ok := person.vals["name"]; ok && name != nil {
+		return pyStr(name)
+	}
+	return asStr(person.get("id"))
 }
 
 // notionChangedPages is the changed pages for the knowledge cache, and every
@@ -426,19 +533,123 @@ func textBlock(kind string, content map[string]any) map[string]any {
 	return map[string]any{"type": kind, kind: content}
 }
 
+// inlineMark is the inline Markdown richMarkdown understands: [text](url),
+// **bold**, ~~strike~~, `code`, *italic* and bare links, in that order.
+var inlineMark = regexp.MustCompile(`\[([^\]\n]+)\]\((https?://[^\s)]+)\)|\*\*([^*\n]+)\*\*|~~([^~\n]+)~~|` +
+	"`([^`\\n]+)`" + `|\*([^*\s](?:[^*\n]*[^*\s])?)\*|(https?://[^\s<>()\[\]]*[^\s<>()\[\].,;:!?'"])`)
+
+// richMarkdown is rich text with inline Markdown turned into Notion's
+// formatting and links.
+func richMarkdown(text string) []any {
+	out := []any{}
+	add := func(s string, annotations map[string]any, link string) {
+		for _, piece := range rich(s) {
+			p := piece.(map[string]any)
+			if annotations != nil {
+				p["annotations"] = annotations
+			}
+			if link != "" {
+				p["text"].(map[string]any)["link"] = map[string]any{"url": link}
+			}
+			out = append(out, p)
+		}
+	}
+	last := 0
+	for _, m := range inlineMark.FindAllStringSubmatchIndex(text, -1) {
+		start := m[0]
+		if start < last {
+			continue
+		}
+		// A single * only starts italics after a space or punctuation, so 2*3*4 stays as it is
+		if m[12] >= 0 && start > 0 && isWordByte(text[start-1]) {
+			continue
+		}
+		add(text[last:start], nil, "")
+		switch {
+		case m[2] >= 0:
+			add(text[m[2]:m[3]], nil, text[m[4]:m[5]])
+		case m[6] >= 0:
+			add(text[m[6]:m[7]], map[string]any{"bold": true}, "")
+		case m[8] >= 0:
+			add(text[m[8]:m[9]], map[string]any{"strikethrough": true}, "")
+		case m[10] >= 0:
+			add(text[m[10]:m[11]], map[string]any{"code": true}, "")
+		case m[12] >= 0:
+			add(text[m[12]:m[13]], map[string]any{"italic": true}, "")
+		case m[14] >= 0:
+			add(text[m[14]:m[15]], nil, text[m[14]:m[15]])
+		}
+		last = m[1]
+	}
+	add(text[last:], nil, "")
+	return out
+}
+
+func isWordByte(b byte) bool {
+	return b == '_' || b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= 0x80
+}
+
+// codeLanguages are Notion's names for the languages people write after ```.
+var codeLanguages = map[string]string{"go": "go", "golang": "go", "python": "python", "py": "python", "c": "c",
+	"cpp": "c++", "c++": "c++", "java": "java", "js": "javascript", "javascript": "javascript", "ts": "typescript",
+	"typescript": "typescript", "bash": "bash", "sh": "shell", "shell": "shell", "zsh": "shell", "json": "json",
+	"yaml": "yaml", "yml": "yaml", "html": "html", "css": "css", "sql": "sql", "rust": "rust", "verilog": "verilog",
+	"vhdl": "vhdl", "asm": "assembly", "assembly": "assembly", "makefile": "makefile", "markdown": "markdown",
+	"md": "markdown", "php": "php", "lua": "lua", "cuda": "c++"}
+
+var tableRule = regexp.MustCompile(`^:?-{2,}:?$`)
+
+// tableCells is the cells of a Markdown table line (| a | b |).
+func tableCells(line string) []string {
+	cells := strings.Split(strings.Trim(strings.TrimSpace(line), "|"), "|")
+	for i := range cells {
+		cells[i] = strings.TrimSpace(cells[i])
+	}
+	return cells
+}
+
 // blocksFromText is simple Markdown to Notion blocks: headings, bullets,
-// numbers, to-dos, quotes, dividers, code, paragraphs.
+// numbers, to-dos, quotes, dividers, code, tables and paragraphs, with inline
+// **bold**, *italic*, `code`, ~~strike~~ and links.
 func blocksFromText(text string) []map[string]any {
 	blocks := []map[string]any{}
 	var code []string
-	inCode := false
+	inCode, language := false, "plain text"
 	codeBlock := func() map[string]any {
-		return textBlock("code", map[string]any{"rich_text": rich(strings.Join(code, "\n")), "language": "plain text"})
+		return textBlock("code", map[string]any{"rich_text": rich(strings.Join(code, "\n")), "language": language})
+	}
+	var table [][]string
+	header := false
+	flushTable := func() {
+		if len(table) == 0 {
+			return
+		}
+		width := 0
+		for _, row := range table {
+			width = max(width, len(row))
+		}
+		var rows []any
+		for _, row := range table {
+			cells := []any{}
+			for i := range width {
+				cell := ""
+				if i < len(row) {
+					cell = row[i]
+				}
+				cells = append(cells, richMarkdown(cell))
+			}
+			rows = append(rows, textBlock("table_row", map[string]any{"cells": cells}))
+		}
+		blocks = append(blocks, textBlock("table", map[string]any{"table_width": width, "has_column_header": header,
+			"has_row_header": false, "children": rows}))
+		table, header = nil, false
 	}
 	for _, line := range splitLines(text) {
-		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+		if s := strings.TrimSpace(line); strings.HasPrefix(s, "```") {
+			flushTable()
 			if !inCode {
 				inCode, code = true, nil
+				language = or(codeLanguages[strings.ToLower(strings.TrimSpace(strings.TrimPrefix(s, "```")))], "plain text")
 			} else {
 				blocks = append(blocks, codeBlock())
 				inCode = false
@@ -450,25 +661,40 @@ func blocksFromText(text string) []map[string]any {
 			continue
 		}
 		s := strings.TrimSpace(line)
+		if strings.HasPrefix(s, "|") && len(s) > 1 {
+			cells := tableCells(s)
+			rule := len(table) == 1
+			for _, c := range cells {
+				rule = rule && tableRule.MatchString(c)
+			}
+			if rule { // the |---|---| under the header row
+				header = true
+			} else {
+				table = append(table, cells)
+			}
+			continue
+		}
+		flushTable()
 		if s == "" {
 			continue
 		}
 		if s == "---" || s == "***" {
 			blocks = append(blocks, textBlock("divider", map[string]any{}))
 		} else if m := headingLine.FindStringSubmatch(s); m != nil {
-			blocks = append(blocks, textBlock(fmt.Sprintf("heading_%d", len(m[1])), map[string]any{"rich_text": rich(m[2])}))
+			blocks = append(blocks, textBlock(fmt.Sprintf("heading_%d", len(m[1])), map[string]any{"rich_text": richMarkdown(m[2])}))
 		} else if m := todoLine.FindStringSubmatch(s); m != nil {
-			blocks = append(blocks, textBlock("to_do", map[string]any{"rich_text": rich(m[2]), "checked": m[1] == "x" || m[1] == "X"}))
+			blocks = append(blocks, textBlock("to_do", map[string]any{"rich_text": richMarkdown(m[2]), "checked": m[1] == "x" || m[1] == "X"}))
 		} else if m := bulletLine.FindStringSubmatch(s); m != nil {
-			blocks = append(blocks, textBlock("bulleted_list_item", map[string]any{"rich_text": rich(m[1])}))
+			blocks = append(blocks, textBlock("bulleted_list_item", map[string]any{"rich_text": richMarkdown(m[1])}))
 		} else if m := numberedLine.FindStringSubmatch(s); m != nil {
-			blocks = append(blocks, textBlock("numbered_list_item", map[string]any{"rich_text": rich(m[1])}))
+			blocks = append(blocks, textBlock("numbered_list_item", map[string]any{"rich_text": richMarkdown(m[1])}))
 		} else if strings.HasPrefix(s, ">") {
-			blocks = append(blocks, textBlock("quote", map[string]any{"rich_text": rich(strings.TrimLeft(s, "> "))}))
+			blocks = append(blocks, textBlock("quote", map[string]any{"rich_text": richMarkdown(strings.TrimLeft(s, "> "))}))
 		} else {
-			blocks = append(blocks, textBlock("paragraph", map[string]any{"rich_text": rich(s)}))
+			blocks = append(blocks, textBlock("paragraph", map[string]any{"rich_text": richMarkdown(s)}))
 		}
 	}
+	flushTable()
 	if inCode {
 		blocks = append(blocks, codeBlock())
 	}
@@ -563,26 +789,53 @@ func notionAppendBlocks(blockID string, blocks []map[string]any) error {
 	return nil
 }
 
+func columnNames(schema []kv) string {
+	var names []string
+	for _, c := range schema {
+		names = append(names, c.Key)
+	}
+	return strings.Join(names, ", ")
+}
+
 func notionPropertiesFor(databaseID string, values []kv) (map[string]any, error) {
-	schema, _, err := notionDatabaseSchema(databaseID)
+	columns, _, err := notionColumns(databaseID)
 	if err != nil {
 		return nil, err
 	}
-	return propertiesFrom(schema, values)
+	return propertiesFrom(columns, values)
 }
 
-func propertiesFrom(schema []kv, values []kv) (map[string]any, error) {
+// propertiesFrom is the properties to set from plain-text values. People are
+// matched to workspace members and relations to rows of the linked database.
+func propertiesFrom(columns []notionColumn, values []kv) (map[string]any, error) {
 	out := map[string]any{}
+	var schema []kv
+	for _, c := range columns {
+		schema = append(schema, kv{c.Name, c.Type})
+	}
 	for _, v := range values {
 		kind, ok := lookup(schema, v.Key)
 		if !ok {
-			var names []string
-			for _, c := range schema {
-				names = append(names, c.Key)
-			}
-			return nil, fmt.Errorf("no property named %s; it has %s", pyRepr(v.Key), strings.Join(names, ", "))
+			return nil, fmt.Errorf("no property named %s; it has %s", pyRepr(v.Key), columnNames(schema))
 		}
-		value, err := propertyValue(kind, v.Value)
+		var value map[string]any
+		var err error
+		switch kind {
+		case "people":
+			var people []any
+			people, err = notionPeople(v.Value)
+			value = map[string]any{"people": people}
+		case "relation":
+			var rows []any
+			for _, c := range columns {
+				if c.Name == v.Key {
+					rows, err = notionRelatedRows(c.Target, v.Value)
+				}
+			}
+			value = map[string]any{"relation": rows}
+		default:
+			value, err = propertyValue(kind, v.Value)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -597,19 +850,19 @@ func notionCreatePage(parentID, parentKind, title, text string, properties []kv)
 	var body map[string]any
 	titleValue, _ := propertyValue("title", title)
 	if parentKind == "database" {
-		schema, _, err := notionDatabaseSchema(parentID)
+		columns, _, err := notionColumns(parentID)
 		if err != nil {
 			return "", err
 		}
 		titleProp := ""
-		for _, c := range schema {
-			if c.Value == "title" {
-				titleProp = c.Key
+		for _, c := range columns {
+			if c.Type == "title" {
+				titleProp = c.Name
 				break
 			}
 		}
 		// Python looks the schema up a second time for the other properties; once is enough
-		props, err := propertiesFrom(schema, properties)
+		props, err := propertiesFrom(columns, properties)
 		if err != nil {
 			return "", err
 		}

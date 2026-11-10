@@ -90,17 +90,39 @@ func FileTools() []anthropic.BetaToolUnionParam {
 			schema{"text": s, "kind": enum("any", "page", "database")}),
 		tool("read_notion_page", "A Notion page's properties and full text (child pages and databases are listed with their ids).",
 			schema{"page_id": s}, "page_id"),
-		tool("query_notion_database", "A Notion database's columns and rows (each row starts with its page id), optionally only rows containing some text.",
-			schema{"database_id": s, "contains": s}, "database_id"),
+		tool("query_notion_database", "A Notion database's columns and rows (each row starts with its page id and ends with when it was last edited), optionally only rows containing some text, sorted by a column.",
+			schema{"database_id": s, "contains": s, "sort_by": str("Column name to sort by"),
+				"descending": schema{"type": "boolean"}}, "database_id"),
+		tool("read_notion_comments", "The open comments on a Notion page, oldest first.", schema{"page_id": s}, "page_id"),
 		// Notion writes
-		tool("create_notion_page", "Queue creating a Notion page under a page, or a row in a database. Content is simple Markdown (# headings, - bullets, 1. numbers, - [ ] to-dos, > quotes, ``` code). For a database row, properties maps column names to plain-text values.",
+		tool("create_notion_page", "Queue creating a Notion page under a page, or a row in a database. Content is simple Markdown (# headings, - bullets, 1. numbers, - [ ] to-dos, > quotes, ``` code, | tables |, **bold**, *italic*, `code`, [links](url)). For a database row, properties maps column names to plain-text values: people are workspace members' names or emails, relations are row titles or links in the linked database, several separated by commas.",
 			schema{"parent_id": s, "parent_type": enum("page", "database"), "title": s, "content": s,
 				"properties": schema{"type": "object", "additionalProperties": s}}, "parent_id", "parent_type", "title"),
-		tool("append_to_notion_page", "Queue adding content (simple Markdown) to the end of a Notion page.",
-			schema{"page_id": s, "content": s}, "page_id", "content"),
-		tool("update_notion_properties", "Queue changing a database row's properties (column name to plain-text value), or a page's title.",
+		tool("append_to_notion_page", "Queue adding content (simple Markdown, as for create_notion_page) to a Notion page: at the end, or right after the first block containing the after text.",
+			schema{"page_id": s, "content": s, "after": str("Put it right after the first block containing this text")}, "page_id", "content"),
+		tool("update_notion_properties", "Queue changing a database row's properties (column name to plain-text value, people and relations as for create_notion_page), or a page's title.",
 			schema{"page_id": s, "properties": schema{"type": "object", "additionalProperties": s}}, "page_id", "properties"),
+		tool("replace_in_notion_page", "Queue replacing text in a Notion page's content, everywhere it appears (matching case), keeping formatting where it can. An empty replacement deletes it, and a block left empty is removed, so replacing a whole line with nothing deletes the line. Use update_notion_properties to rename a page.",
+			schema{"page_id": s, "find": s, "replace": s}, "page_id", "find"),
+		tool("set_notion_todo", "Queue ticking (or unticking) the first to-do in a Notion page that contains some text.",
+			schema{"page_id": s, "todo": str("Text of the to-do"), "checked": schema{"type": "boolean", "description": "false to untick"}},
+			"page_id", "todo"),
 		tool("archive_notion_page", "Queue moving a Notion page or database row to Notion's trash (restorable).", schema{"page_id": s}, "page_id"),
+		tool("restore_notion_page", "Queue taking a Notion page or row out of the trash. Needs its id or link (Notion's search doesn't show trashed pages).",
+			schema{"page_id": s}, "page_id"),
+		tool("move_notion_page", "Queue moving a Notion page into another page.", schema{"page_id": s, "new_parent_page_id": s}, "page_id", "new_parent_page_id"),
+		tool("add_notion_comment", "Queue commenting on a Notion page as the IEEE CS bot.", schema{"page_id": s, "text": s}, "page_id", "text"),
+		tool("create_notion_database", "Queue making a Notion database (a table) inside a page; the bot can't make one at the top of the workspace. Exactly one column is the title column (type title); a Name title column is added if none is. Notion can't make Status columns through the API, so use a select with those options.",
+			schema{"parent_page_id": s, "title": s, "description": s, "icon": str("One emoji"),
+				"inline":  schema{"type": "boolean", "description": "Show it as a table in the page, rather than as its own sub-page"},
+				"columns": columnSchema()}, "parent_page_id", "title", "columns"),
+		tool("update_notion_database", "Queue changing a Notion database: its title or description, and adding, renaming, retyping or removing columns, or adding choices to a select column. Removing a column deletes its values in every row.",
+			schema{"database_id": s, "title": s, "description": s, "add_columns": columnSchema(),
+				"rename_columns":      schema{"type": "object", "additionalProperties": s, "description": "Old name to new name"},
+				"change_column_types": columnSchema(),
+				"add_options": schema{"type": "object", "additionalProperties": schema{"type": "array", "items": s},
+					"description": "Select column name to the choices to add"},
+				"remove_columns": schema{"type": "array", "items": s}}, "database_id"),
 		tool("add_discord_file_to_notion", "Queue adding a file attached to a Discord message to the end of a Notion page (images show inline).",
 			schema{"message_url": s, "page_id": s, "attachment": s, "caption": s}, "message_url", "page_id"),
 	}
@@ -353,13 +375,47 @@ func init() {
 		"search_notion":    func(a *Ask, x fileArgs) (string, error) { return a.searchNotion(x.s("text"), x.s("kind")) },
 		"read_notion_page": func(a *Ask, x fileArgs) (string, error) { return a.readNotionPage(x.s("page_id")) },
 		"query_notion_database": func(a *Ask, x fileArgs) (string, error) {
-			return a.queryNotionDatabase(x.s("database_id"), x.s("contains"))
+			return a.queryNotionDatabase(x.s("database_id"), x.s("contains"), x.s("sort_by"), truthy(x.o.get("descending")))
 		},
 		"create_notion_page": func(a *Ask, x fileArgs) (string, error) {
 			return a.createNotionPage(x.s("parent_id"), x.s("parent_type"), x.s("title"), x.s("content"), x.pairs("properties"))
 		},
 		"append_to_notion_page": func(a *Ask, x fileArgs) (string, error) {
-			return a.appendToNotionPage(x.s("page_id"), x.s("content"))
+			return a.appendToNotionPage(x.s("page_id"), x.s("content"), x.s("after"))
+		},
+		"read_notion_comments": func(a *Ask, x fileArgs) (string, error) { return a.readNotionComments(x.s("page_id")) },
+		"replace_in_notion_page": func(a *Ask, x fileArgs) (string, error) {
+			return a.replaceInNotionPage(x.s("page_id"), x.s("find"), asStr(x.o.get("replace")))
+		},
+		"set_notion_todo": func(a *Ask, x fileArgs) (string, error) {
+			return a.setNotionTodo(x.s("page_id"), x.s("todo"), !x.has("checked") || truthy(x.o.get("checked")))
+		},
+		"restore_notion_page": func(a *Ask, x fileArgs) (string, error) { return a.restoreNotionPage(x.s("page_id")) },
+		"move_notion_page": func(a *Ask, x fileArgs) (string, error) {
+			return a.moveNotionPage(x.s("page_id"), x.s("new_parent_page_id"))
+		},
+		"add_notion_comment": func(a *Ask, x fileArgs) (string, error) { return a.addNotionComment(x.s("page_id"), x.s("text")) },
+		"create_notion_database": func(a *Ask, x fileArgs) (string, error) {
+			return a.createNotionDatabase(x.s("parent_page_id"), x.s("title"), x.s("description"), x.s("icon"),
+				truthy(x.o.get("inline")), columnSpecs(x.o.get("columns")))
+		},
+		"update_notion_database": func(a *Ask, x fileArgs) (string, error) {
+			change := notionDatabaseChange{Title: x.s("title"), Description: x.s("description"),
+				Add: columnSpecs(x.o.get("add_columns")), Rename: x.pairs("rename_columns"),
+				Retype: columnSpecs(x.o.get("change_column_types"))}
+			if o := asObj(x.o.get("add_options")); o != nil {
+				for _, column := range o.keys {
+					var options []string
+					for _, v := range asList(o.vals[column]) {
+						options = append(options, pyStr(v))
+					}
+					change.AddOptions = append(change.AddOptions, optionsFor{column, options})
+				}
+			}
+			for _, v := range asList(x.o.get("remove_columns")) {
+				change.Remove = append(change.Remove, pyStr(v))
+			}
+			return a.updateNotionDatabase(x.s("database_id"), change)
 		},
 		"update_notion_properties": func(a *Ask, x fileArgs) (string, error) {
 			return a.updateNotionProperties(x.s("page_id"), x.pairs("properties"))
@@ -887,11 +943,11 @@ func (a *Ask) readNotionPage(pageID string) (string, error) {
 	return fmt.Sprintf("%s | %s\n%s\n\n%s", p.Title, p.URL, p.Props, botkit.Cut(p.Body, 30000)), nil
 }
 
-func (a *Ask) queryNotionDatabase(databaseID, contains string) (string, error) {
+func (a *Ask) queryNotionDatabase(databaseID, contains, sortBy string, descending bool) (string, error) {
 	if err := needNotion(); err != nil {
 		return "", err
 	}
-	title, schema, rows, err := notion.queryDatabase(notionID(databaseID), contains)
+	title, schema, rows, err := notion.queryDatabase(notionID(databaseID), contains, sortBy, descending)
 	if err != nil {
 		return "", err
 	}
@@ -932,9 +988,12 @@ func (a *Ask) createNotionPage(parentID, parentType, title, content string, prop
 	})
 }
 
-func (a *Ask) appendToNotionPage(pageID, content string) (string, error) {
+func (a *Ask) appendToNotionPage(pageID, content, after string) (string, error) {
 	if err := needNotion(); err != nil {
 		return "", err
+	}
+	if strings.TrimSpace(after) != "" {
+		return a.insertIntoNotionPage(pageID, after, content)
 	}
 	pid := notionID(pageID)
 	name, err := a.notionTitle(pid)
