@@ -10,6 +10,7 @@ import (
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/aidraft"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/eventtext"
 	off "github.com/IEEECS-UCF/ieee-cs-bot/internal/officer"
 )
@@ -434,5 +435,47 @@ func TestApprovingAnOutdatedMessageDoesNothing(t *testing.T) {
 	tc.approve(ctx, "g1", "announcement")
 	if len(posts(tc)) != 0 || !strings.Contains(tc.f.lastSaid(ctx), "edited since") {
 		t.Fatalf("said %q", tc.f.said(ctx))
+	}
+}
+
+// ---------- day-of reminders ----------
+
+type fakeReminders struct{ runs int }
+
+func (f *fakeReminders) SentIDs() map[int64]bool { return nil }
+func (f *fakeReminders) RunSoon()                { f.runs++ }
+
+func TestAReminderApprovedAfterItsTimePostsRightAway(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		day   int
+		reply string
+		runs  int
+	}{
+		{"today, after its time", 0, "Approved. Its post time has passed, so it posts in the next minute.", 1},
+		{"tomorrow", 1, "Approved. It posts Tue Nov 3 at 9:00.", 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := newTestCog(t)
+			tc.withReviews(t, nil)
+			reminders := &fakeReminders{}
+			tc.bot.AddCog(cogapi.EventRemindersName, cogapi.EventReminders(reminders))
+			e := event(days(tt.day))
+			tc.cache.Set(snapshot(e))
+			if r, why, err := off.OpenReview(tc.bot, e, "reminder", "Bash is TODAY!", nil, off.ReviewOptions{}); r == nil {
+				t.Fatalf("review not opened: %q %v", why, err)
+			}
+			ctx := press(tc.bot, other)
+			tc.approve(ctx, "g1", "reminder")
+			if got := tc.f.lastSaid(ctx); got != tt.reply {
+				t.Errorf("said %q, want %q", got, tt.reply)
+			}
+			if reminders.runs != tt.runs {
+				t.Errorf("reminder pass ran %d times, want %d", reminders.runs, tt.runs)
+			}
+			if len(posts(tc)) != 0 {
+				t.Error("the officer cog posted the reminder itself")
+			}
+		})
 	}
 }

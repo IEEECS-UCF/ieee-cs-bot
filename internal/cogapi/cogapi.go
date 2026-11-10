@@ -38,6 +38,9 @@ type CalendarSync interface {
 type EventReminders interface {
 	// SentIDs is state["sent"]: Discord event IDs already reminded.
 	SentIDs() map[int64]bool
+	// RunSoon runs a pass now in the background, so a reminder approved
+	// after its post time goes out without waiting for the loop.
+	RunSoon()
 }
 
 // Officer is the officer tools cog (internal/cogs/officer): the forum posts

@@ -9,6 +9,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
 	off "github.com/IEEECS-UCF/ieee-cs-bot/internal/officer"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/store"
 )
@@ -61,7 +62,25 @@ func (c *Cog) reviewWhen(gid, kind string) string {
 	if e == nil {
 		return ""
 	}
+	if c.reminderDue(gid) {
+		return "" // its time has passed: it goes out on the next pass
+	}
 	return off.PostLabel(e.Start)
+}
+
+// reminderDue: the day-of reminder's post time has passed and the event
+// hasn't started, so approving it should post it right away.
+func (c *Cog) reminderDue(gid string) bool {
+	snap := c.cache.WithStore()
+	if snap == nil {
+		return false
+	}
+	e := snap.Event(gid)
+	if e == nil {
+		return false
+	}
+	at := c.now()
+	return !at.Before(off.PostAt(e.Start)) && at.Before(e.Start)
 }
 
 // approve someone else's post: an announcement posts now, a reminder at its time.
@@ -86,6 +105,7 @@ func (c *Cog) approve(ctx *botkit.Ctx, gid, kind string) {
 	}
 	ctx.Defer(true)
 	var reply, posted string
+	postNow := false
 	if off.PostsNow[kind] {
 		var channel *discordgo.Channel
 		if id := off.TargetChannelID(kind); id != 0 {
@@ -108,6 +128,9 @@ func (c *Cog) approve(ctx *botkit.Ctx, gid, kind string) {
 			}
 		}
 		reply = "Posted: " + posted
+	} else if kind == "reminder" && c.reminderDue(gid) {
+		reply = "Approved. Its post time has passed, so it posts in the next minute."
+		postNow = true
 	} else {
 		when := c.reviewWhen(gid, kind)
 		if when == "" {
@@ -147,6 +170,12 @@ func (c *Cog) approve(ctx *botkit.Ctx, gid, kind string) {
 	}
 	off.ShowReview(c.bot, kind, approved, c.reviewWhen(gid, kind), buttons)
 	followup(ctx, reply)
+	if postNow && approved.Status == off.Approved {
+		// After ShowReview, so the posted status it shows isn't overwritten
+		if r, ok := c.bot.Cog(cogapi.EventRemindersName).(cogapi.EventReminders); ok && r != nil {
+			r.RunSoon()
+		}
+	}
 }
 
 // postApproved posts the approved text (with the @everyone WithPing adds)

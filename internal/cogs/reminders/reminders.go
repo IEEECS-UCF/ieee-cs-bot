@@ -112,6 +112,18 @@ func New(b *botkit.Bot) *Cog {
 		state: store.Load(officer.ReminderStateFile, State{Sent: map[string]string{}})}
 }
 
+// RunSoon runs a pass in the background (cogapi.EventReminders).
+func (c *Cog) RunSoon() {
+	if c.channelID == "" {
+		return
+	}
+	go func() {
+		if err := c.Run(); err != nil {
+			c.bot.Alert("Event reminders", err, "")
+		}
+	}()
+}
+
 // SentIDs is state["sent"] as IDs (cogapi.EventReminders).
 func (c *Cog) SentIDs() map[int64]bool {
 	c.mu.Lock()
