@@ -56,6 +56,7 @@ Questions:
 Changes:
 - Find what you're changing first (list_events, search_drive, search_notion, find_discord_files), then call the change tool. Ask instead of guessing when the target or the change is unclear, e.g. when two folders could match.
 - To file something someone posted, find the message with find_discord_files, then save_discord_file_to_drive or add_discord_file_to_notion.
+- You can see images. When a question is about what's in a photo, screenshot or flyer posted in Discord (e.g. "add the person in this photo to Notion"), find the message (find_discord_files, or the link you were given) and look at it with view_discord_image, then use what it shows. Never say you can't see an image without trying it.
 - Change tools don't change anything themselves. They queue the change, and it only happens when the officer who asked clicks Confirm under your reply. So describe what will change; never say it's done.
 - Deleting only moves things to Drive's or Notion's trash, where they can be restored.
 - Notion: new pages and databases go inside a page the bot can see, never at the top of the workspace. search_notion only matches titles, so to find an untitled database, read the page it's on (read_notion_page lists child databases with their ids). To change part of a page, use replace_in_notion_page or append_to_notion_page with after, rather than adding a second copy at the end.
@@ -171,6 +172,9 @@ type Ask struct {
 	Changes []Change
 	Usage   Usage
 	Used    []string // the tools this run called, with their search or URL, for the log
+	// images are the pictures the tool call being run wants Claude to see
+	// (view_discord_image); turn sends them with that call's result.
+	images []anthropic.BetaToolResultBlockParamContentUnion
 	// History is the whole conversation so far, in order, never edited (so the
 	// cache and Claude's earlier thinking stay valid). Run adds this turn to it;
 	// it's nil after a turn that can't be continued (an error or a refusal).
@@ -285,12 +289,17 @@ func (a *Ask) turn(ctx context.Context, userText string) string {
 			if block.Type != "tool_use" {
 				continue
 			}
+			a.images = nil
 			result, err := a.Tool(block.Name, block.Input)
 			if err != nil { // a tool failing shouldn't end the answer
 				log.Printf("/officer ask: tool %s failed: %s", block.Name, truncateLog(err.Error(), 500))
 				result = ToolErrorText(err)
+				a.images = nil
 			}
-			results = append(results, anthropic.NewBetaToolResultBlock(block.ID, result, err != nil))
+			resultBlock := anthropic.NewBetaToolResultBlock(block.ID, result, err != nil)
+			resultBlock.OfToolResult.Content = append(resultBlock.OfToolResult.Content, a.images...)
+			a.images = nil
+			results = append(results, resultBlock)
 		}
 		messages = append(messages, anthropic.NewBetaUserMessage(results...))
 	}

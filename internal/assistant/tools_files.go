@@ -35,6 +35,8 @@ func FileTools() []anthropic.BetaToolUnionParam {
 			schema{"channel": str("Channel or thread name, e.g. marketing"),
 				"from_asker": schema{"type": "boolean", "description": "Only files the asker posted"},
 				"limit":      schema{"type": "integer", "minimum": 1, "maximum": 25}}, "channel"),
+		tool("view_discord_image", "Look at an image attached to a Discord message (a photo, screenshot or flyer) to read what's in it: a name and title on a business card or badge, text on a slide, a schedule. Pass the message link from find_discord_files, a search result or the conversation.",
+			schema{"message_url": s, "attachment": str("File name, or its number from find_discord_files; the first image if left out")}, "message_url"),
 		// Drive reads
 		tool("search_drive", "Search the chapter's Google Drive (ieeecsucf@gmail.com) by name or contents. Returns id | name | kind | last changed | link. With folder_id and no text, it lists the folder.",
 			schema{"text": s, "kind": enum("any", "folder", "doc", "sheet", "slides", "form", "pdf", "image"),
@@ -291,6 +293,9 @@ func init() {
 				limit = int(n)
 			}
 			return a.findDiscordFiles(x.s("channel"), truthy(x.o.get("from_asker")), limit)
+		},
+		"view_discord_image": func(a *Ask, x fileArgs) (string, error) {
+			return a.viewDiscordImage(x.s("message_url"), x.s("attachment"))
 		},
 		"search_drive": func(a *Ask, x fileArgs) (string, error) {
 			return a.searchDrive(x.s("text"), x.s("kind"), x.s("folder_id"))
