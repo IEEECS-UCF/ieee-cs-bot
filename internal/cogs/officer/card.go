@@ -927,7 +927,7 @@ func (k *card) reminderPicker() []discordgo.MessageComponent {
 			{Label: "Always send", Value: "always"},
 			{Label: "Never send", Value: "never"}}, pick("send")),
 		v.Select("Who does it ping?", []discordgo.SelectMenuOption{
-			{Label: "Auto (from the event name)", Value: "auto"},
+			{Label: "Auto (role from the event name, else @everyone)", Value: "auto"},
 			{Label: "@Workshops", Value: "workshops"},
 			{Label: "@Socials", Value: "socials"},
 			{Label: "@Pro-Dev", Value: "prodev"},

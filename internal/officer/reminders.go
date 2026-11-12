@@ -30,7 +30,8 @@ func ReviewHour() int { return botkit.EnvInt("REMINDER_REVIEW_HOUR", 12) }
 
 // Which role each kind of event pings, matched on words in the event name
 // (eventtext.RoleWords).
-// Events that match nothing (GBMs, TechX) are announced without a ping.
+// Events that match nothing (GBMs, TechX) ping @everyone; "Hey everyone!" in
+// plain text notified nobody.
 // Officers can override either choice per event from its card (/officer event).
 var RoleEnv = map[string]string{"workshops": "REMINDER_ROLE_WORKSHOPS", "socials": "REMINDER_ROLE_SOCIALS",
 	"prodev": "REMINDER_ROLE_PRODEV"}
@@ -107,7 +108,7 @@ func ResolvePing(name string, override map[string]string) (string, int64) {
 	if id := RoleFor(name); id != 0 {
 		return "role", id
 	}
-	return "none", 0
+	return "everyone", 0
 }
 
 // ShouldSend is (send?, why) for this event, honoring an officer's override.

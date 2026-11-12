@@ -45,8 +45,13 @@ func TestAutoPingByKind(t *testing.T) {
 	if !strings.HasPrefix(text, "<@&111>") || everyone(allowed) || !slices.Equal(allowed.Roles, []string{"111"}) {
 		t.Errorf("%q %+v", text, allowed)
 	}
-	if text, _ := BuildMessage(ev("Fall GBM #3", "ENG2 205"), "1", nil); !strings.HasPrefix(text, "Hey everyone!") {
-		t.Error(text)
+	// A GBM matches no role, so it pings @everyone for real (not plain "Hey everyone!")
+	text2, allowed2 := BuildMessage(ev("Fall GBM #3", "ENG2 205"), "1", nil)
+	if !strings.HasPrefix(text2, "@everyone **Fall GBM #3** is TODAY!") || !everyone(allowed2) {
+		t.Errorf("%q %+v", text2, allowed2)
+	}
+	if posted := MentionsIn(text2); !everyone(posted) {
+		t.Errorf("the approved post wouldn't ping: %+v", posted)
 	}
 	want := "<@&111> **Bash Scripting Workshop** is TODAY! ( ´ ▽ ` )ﾉ\n🕡 5:00 PM  ·  📍 ENG2 205\n" +
 		"https://discord.com/events/1/1\n(Please mark interested if you're coming!)"
@@ -55,7 +60,7 @@ func TestAutoPingByKind(t *testing.T) {
 	}
 }
 
-func TestEveryoneOnlyWhenChosen(t *testing.T) {
+func TestEveryoneAndNoPingWhenChosen(t *testing.T) {
 	testutil.Setup(t)
 	text, allowed := BuildMessage(ev("Fall GBM #3", "ENG2 205"), "1", map[string]string{"ping": "everyone"})
 	if !strings.HasPrefix(text, "@everyone") || !everyone(allowed) {
