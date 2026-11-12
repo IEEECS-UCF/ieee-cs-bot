@@ -391,3 +391,106 @@ func TestClearingOldToolResultsTurnsItselfOffIfRefused(t *testing.T) {
 		t.Error("tried clearing again after the API refused it")
 	}
 }
+
+func inserts(t *testing.T) *[]*calendar.Event {
+	var got []*calendar.Event
+	old := InsertEvent
+	InsertEvent = func(body *calendar.Event) (*calendar.Event, error) {
+		got = append(got, body)
+		return &calendar.Event{Id: body.Id, Summary: body.Summary}, nil
+	}
+	t.Cleanup(func() { InsertEvent = old })
+	return &got
+}
+
+// at is an event on the given day from today, 6:30-8:30 PM Eastern.
+func at(gid, name, location string, daysAhead int) eventtext.Event {
+	d := time.Now().In(testutil.TZ).AddDate(0, 0, daysAhead)
+	start := time.Date(d.Year(), d.Month(), d.Day(), 18, 30, 0, 0, testutil.TZ)
+	return eventtext.Event{ID: gid, Name: name, Location: location, Start: start, End: start.Add(2 * time.Hour)}
+}
+
+func dayAhead(days int) string {
+	return time.Now().In(testutil.TZ).AddDate(0, 0, days).Format("01/02/2006")
+}
+
+func TestNewEventsWaitForConfirm(t *testing.T) {
+	testutil.Setup(t)
+	a, sync := makeAsk(t)
+	inserted := inserts(t)
+	reply, err := call(t, a, "create_event", map[string]any{"title": "Spring  Kickoff GBM", "date": dayAhead(10),
+		"time": "6:30 PM-8:30 PM", "room": "Egmont Key Room 224", "room_status": "requested", "description": "Meet the officers."})
+	if err != nil || !strings.HasPrefix(reply, "Queued:") || len(*inserted) != 0 {
+		t.Fatalf("%q %v", reply, err) // nothing yet
+	}
+	if !strings.Contains(reply, "within a few minutes") {
+		t.Error(reply)
+	}
+	summary := a.Changes[0].Summary
+	if !strings.Contains(summary, "**Spring Kickoff GBM**") || !strings.Contains(summary, "Egmont Key Room 224 (requested") {
+		t.Error(summary)
+	}
+	result, err := a.Changes[0].Apply() // what Confirm runs
+	if err != nil || len(*inserted) != 1 || len(sync.synced) != 1 {
+		t.Fatalf("%q %v %d %v", result, err, len(*inserted), sync.synced)
+	}
+	body := (*inserted)[0]
+	if body.Summary != "Spring Kickoff GBM" || body.Location != "" || body.Description != "Meet the officers." ||
+		!strings.HasSuffix(body.Start.DateTime, "18:30:00-05:00") || body.Id == "" {
+		t.Errorf("%+v %+v", body, body.Start)
+	}
+	room := store.EventStore{}.Get(body.Id).Room // a requested room is tracked on the card, not the calendar
+	if room == nil || room.Status != "requested" || room.Room != "Egmont Key Room 224" || room.By != asker {
+		t.Errorf("%+v", room)
+	}
+}
+
+func TestAConfirmedRoomGoesOnTheCalendar(t *testing.T) {
+	testutil.Setup(t)
+	a, _ := makeAsk(t)
+	inserted := inserts(t)
+	if _, err := call(t, a, "create_event", map[string]any{"title": "Intro to Vulkan", "date": dayAhead(5),
+		"time": "7 PM", "room": "ENG2 205", "room_status": "confirmed"}); err != nil {
+		t.Fatal(err)
+	}
+	a.Changes[0].Apply()
+	body := (*inserted)[0]
+	if body.Location != "ENG2 205" || (store.EventStore{}).Get(body.Id).Room.Status != "confirmed" {
+		t.Errorf("%+v", body)
+	}
+	if !strings.HasSuffix(body.End.DateTime, "21:00:00-05:00") { // two hours when there's no end
+		t.Error(body.End.DateTime)
+	}
+}
+
+func TestNewEventChecks(t *testing.T) {
+	testutil.Setup(t)
+	a, _ := makeAsk(t, at("g1", "Spring Kickoff GBM", "ENG2 102", 70), at("g2", "Bash Night", "ENG2 205", 10))
+	inserts(t)
+	// A room needs a status
+	if _, err := call(t, a, "create_event", map[string]any{"title": "X", "date": dayAhead(5), "time": "6 PM",
+		"room": "ENG2 205"}); err == nil || !strings.Contains(err.Error(), "room_status") {
+		t.Errorf("%v", err)
+	}
+	if _, err := call(t, a, "create_event", map[string]any{"title": "X", "date": dayAhead(-2), "time": "6 PM"}); err == nil ||
+		!strings.Contains(err.Error(), "in the past") {
+		t.Errorf("%v", err)
+	}
+	if len(a.Changes) != 0 {
+		t.Fatalf("%d changes queued", len(a.Changes))
+	}
+	// Far off: Discord follows 30 days before; the same name that day is flagged
+	far, _ := call(t, a, "create_event", map[string]any{"title": "Spring Kickoff GBM", "date": dayAhead(70), "time": "6:30-8:30 PM"})
+	if !strings.Contains(far, "30 days before it starts") || !strings.Contains(far, "already on the calendar that day (id g1)") {
+		t.Error(far)
+	}
+	clash, _ := call(t, a, "create_event", map[string]any{"title": "Linux Workshop", "date": dayAhead(10), "time": "7:00 PM-8:00 PM",
+		"room": "ENG2 205", "room_status": "confirmed"})
+	if !strings.Contains(clash, "Same room as **Bash Night**") {
+		t.Error(clash)
+	}
+	project, _ := call(t, a, "create_event", map[string]any{"title": "Project meeting", "date": dayAhead(3), "time": "5 PM"})
+	if !strings.Contains(project, "stay off Discord") {
+		t.Error(project)
+	}
+}

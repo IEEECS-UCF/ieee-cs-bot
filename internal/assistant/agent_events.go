@@ -13,6 +13,7 @@ import (
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/calendarsync"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/eventtext"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/gcal"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/officer"
@@ -36,7 +37,10 @@ var (
 		_, err := gcal.Patch(botkit.Env("GOOGLE_CALENDAR_ID", ""), eventID, body)
 		return err
 	}
-	OpenReview = officer.OpenReview
+	OpenReview  = officer.OpenReview
+	InsertEvent = func(body *calendar.Event) (*calendar.Event, error) {
+		return gcal.Insert(botkit.Env("GOOGLE_CALENDAR_ID", ""), body)
+	}
 )
 
 func (a *Ask) snapshot() (*officer.Snapshot, error) { return a.Events.Get(false) }
@@ -203,6 +207,93 @@ func (a *Ask) editEvent(eventID string, title, date, tm, description *string) (s
 		a.syncSoon()
 		return fmt.Sprintf("Updated %s: %s. Discord follows shortly.", e.Name, list), nil
 	})
+}
+
+// createEvent queues a new calendar event. Calendar sync makes the Discord
+// event from it (and links the two), within calendarsync.LookaheadDays of the start; the
+// bot never makes the Discord event itself, because sync deletes bot-made
+// Discord events that aren't linked to the calendar. Only a confirmed room
+// goes on the calendar; a requested one is tracked on the card, as with
+// /officer events → New event.
+func (a *Ask) createEvent(title, date, tm, room, roomStatus, description string) (string, error) {
+	title = eventtext.Normalize(title)
+	room = eventtext.Normalize(room)
+	if title == "" {
+		return "", fmt.Errorf("the event needs a title")
+	}
+	if room != "" && roomStatus != "confirmed" && roomStatus != "requested" {
+		return "", fmt.Errorf("say whether the room is confirmed or only requested (room_status)")
+	}
+	if room == "" {
+		roomStatus = ""
+	}
+	now := time.Now().In(TZ())
+	start, end, err := officer.ParseForm(date, tm, now)
+	if err != nil {
+		return "", err
+	}
+	if start.Before(now) {
+		return "", fmt.Errorf("%s is in the past", pytime.Strftime(start, "%a %b %-d, %Y %-I:%M %p"))
+	}
+	snap, err := a.snapshot()
+	if err != nil {
+		return "", err
+	}
+	var notes []string
+	for _, e := range snap.Events {
+		if strings.EqualFold(e.Name, title) && officer.Day(e.Start).Equal(officer.Day(start)) {
+			notes = append(notes, fmt.Sprintf("An event with this name is already on the calendar that day (id %s); "+
+				"edit that one instead unless they really want a second.", e.ID))
+		}
+	}
+	for _, line := range officer.ClashLines(officer.Clashes(snap, start, end, room, ""), false) {
+		notes = append(notes, strings.TrimSpace(strings.TrimPrefix(line, "⚠️")))
+	}
+	follows := "within a few minutes of Confirm"
+	if lead := calendarsync.LookaheadDays; start.After(now.AddDate(0, 0, lead)) {
+		follows = fmt.Sprintf("around %s, %d days before it starts", pytime.Strftime(start.AddDate(0, 0, -lead), "%b %-d"), lead)
+	}
+	if eventtext.IsProject(title) {
+		follows = "never (project meetings stay off Discord's event list)"
+	}
+	where := "TBA"
+	switch roomStatus {
+	case "confirmed":
+		where = room + " (confirmed)"
+	case "requested":
+		where = room + " (requested; the calendar says TBA until it's confirmed)"
+	}
+	when := fmt.Sprintf("%s, %s-%s", pytime.Strftime(start, "%a %b %-d, %Y"), pytime.Strftime(start, "%-I:%M %p"),
+		pytime.Strftime(end, "%-I:%M %p"))
+	location := ""
+	if roomStatus == "confirmed" {
+		location = room
+	}
+	body := officer.CalendarBody(title, start, end, description, location)
+	// A fixed ID, so a retried insert finds the event instead of adding a second
+	body.Id = gcal.IDFor("ask", strconv.FormatInt(timeSnowflake(time.Now()), 10))
+	queued, err := a.queue(fmt.Sprintf("new event **%s**: %s · %s", title, when, where), func() (string, error) {
+		item, err := InsertEvent(body)
+		if err != nil {
+			return "", err
+		}
+		if roomStatus != "" {
+			if _, err := eventStore.SetRoom(item.Id, roomStatus, room, a.AskerID, ""); err != nil {
+				return "", err
+			}
+		}
+		a.syncSoon()
+		return fmt.Sprintf("Created %s (%s) on the calendar. The Discord event follows %s.", title, when,
+			strings.TrimSuffix(follows, " of Confirm")), nil
+	})
+	if err != nil {
+		return "", err
+	}
+	out := queued + " The Discord event follows " + follows + "."
+	if len(notes) > 0 {
+		out += "\nHeads up: " + strings.Join(notes, " ")
+	}
+	return out, nil
 }
 
 var nonDigits = regexp.MustCompile(`\D`)
