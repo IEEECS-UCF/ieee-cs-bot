@@ -73,6 +73,12 @@ func FileTools() []anthropic.BetaToolUnionParam {
 			schema{"title": s, "description": s, "questions": formQuestionsSchema(), "folder_id": s}, "title", "questions"),
 		tool("add_form_questions", "Queue adding questions to the end of an existing Google Form.",
 			schema{"form_id": s, "questions": formQuestionsSchema()}, "form_id", "questions"),
+		tool("edit_form_question", "Queue changing one question on a Google Form: its title, help text, whether it's required, or a choice question's options (the new list replaces the old). Leave out what doesn't change. Read the form first.",
+			schema{"form_id": s, "question": str("Its number as read_google_form lists it, or its exact title"), "title": s,
+				"help": s, "required": schema{"type": "boolean"},
+				"options": schema{"type": "array", "items": s, "description": "The full new list of options"}}, "form_id", "question"),
+		tool("remove_form_question", "Queue removing one question (or section or text block) from a Google Form. Answers already given stay in the responses. Read the form first.",
+			schema{"form_id": s, "question": str("Its number as read_google_form lists it, or its exact title")}, "form_id", "question"),
 		tool("create_google_sheet", "Queue creating a Google Sheet; the first row is usually the headers.",
 			schema{"title": s, "rows": rowsSchema(), "folder_id": s}, "title"),
 		tool("update_sheet_cells", "Queue writing rows over cells, starting at the top-left of range (e.g. 'Attendance!B2'). Overwrites what's there; formulas work.",
@@ -353,6 +359,31 @@ func init() {
 		},
 		"add_form_questions": func(a *Ask, x fileArgs) (string, error) {
 			return a.addFormQuestions(x.s("form_id"), formQuestions(x.o.get("questions")))
+		},
+		"edit_form_question": func(a *Ask, x fileArgs) (string, error) {
+			var edit FormEdit
+			if x.has("title") {
+				v := x.s("title")
+				edit.Title = &v
+			}
+			if x.has("help") {
+				v := x.s("help")
+				edit.Help = &v
+			}
+			if x.has("required") {
+				v := truthy(x.o.get("required"))
+				edit.Required = &v
+			}
+			if x.has("options") {
+				edit.Options = []string{}
+				for _, o := range asList(x.o.get("options")) {
+					edit.Options = append(edit.Options, pyStr(o))
+				}
+			}
+			return a.editFormQuestion(x.s("form_id"), x.s("question"), edit)
+		},
+		"remove_form_question": func(a *Ask, x fileArgs) (string, error) {
+			return a.removeFormQuestion(x.s("form_id"), x.s("question"))
 		},
 		"create_google_sheet": func(a *Ask, x fileArgs) (string, error) {
 			return a.createGoogleSheet(x.s("title"), rowsArg(x.o.get("rows")), x.s("folder_id"))

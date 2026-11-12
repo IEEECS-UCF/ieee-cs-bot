@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -183,6 +184,177 @@ func driveAddFormQuestions(formID string, questions []FormQuestion) error {
 	}
 	_, err = gcal.Retry(func() (*forms.BatchUpdateFormResponse, error) {
 		return svc.Forms.BatchUpdate(formID, &forms.BatchUpdateFormRequest{Requests: requests}).Do()
+	})
+	return err
+}
+
+// FormItem is one item of a form (a question, or a section, text or image),
+// numbered from 1 as read_google_form lists them.
+type FormItem struct {
+	ID       string
+	Number   int
+	Title    string
+	Help     string
+	Kind     string // kindOf for a question, else "section", "text", "image" or "video"
+	Question bool
+	Required bool
+	Choice   bool // options can be changed
+}
+
+// Line is the item as the edit tools show it: `3. Title (kind, required)`.
+func (f FormItem) Line() string {
+	line := fmt.Sprintf("%d. %s (%s", f.Number, f.Title, f.Kind)
+	if f.Required {
+		line += ", required"
+	}
+	return line + ")"
+}
+
+// FormEdit is what edit_form_question changes; nil leaves a field as it is.
+type FormEdit struct {
+	Title, Help *string
+	Required    *bool
+	Options     []string // replaces a choice question's options ("Other" is kept)
+}
+
+func formItem(i int, item *forms.Item) FormItem {
+	f := FormItem{ID: item.ItemId, Number: i + 1, Title: item.Title, Help: item.Description}
+	switch {
+	case item.QuestionItem != nil:
+		q := item.QuestionItem.Question
+		f.Question, f.Kind, f.Required, f.Choice = true, kindOf(q), q.Required, q.ChoiceQuestion != nil
+	case item.PageBreakItem != nil:
+		f.Kind = "section"
+	case item.TextItem != nil:
+		f.Kind = "text"
+	case item.ImageItem != nil:
+		f.Kind = "image"
+	case item.VideoItem != nil:
+		f.Kind = "video"
+	default:
+		f.Kind = "other"
+	}
+	return f
+}
+
+// driveFormItems is a form's title and items.
+func driveFormItems(formID string) (string, []FormItem, error) {
+	svc, err := formsService()
+	if err != nil {
+		return "", nil, err
+	}
+	form, err := getForm(svc, formID)
+	if err != nil {
+		return "", nil, err
+	}
+	var items []FormItem
+	for i, item := range form.Items {
+		items = append(items, formItem(i, item))
+	}
+	return form.Info.Title, items, nil
+}
+
+// currentItem finds the item again by its ID, so a question that moved since
+// the officer saw it is still the one changed, and a deleted one isn't
+// mistaken for whatever took its place.
+func currentItem(svc *forms.Service, formID, itemID string) (int, *forms.Item, error) {
+	form, err := getForm(svc, formID)
+	if err != nil {
+		return 0, nil, err
+	}
+	for i, item := range form.Items {
+		if item.ItemId == itemID {
+			return i, item, nil
+		}
+	}
+	return 0, nil, errors.New("that question isn't on the form anymore")
+}
+
+// driveRemoveFormItem deletes one item from a form. (Forms has no trash: its
+// responses stay in the form's responses and sheet, but the question is gone.)
+func driveRemoveFormItem(formID, itemID string) error {
+	svc, err := formsService()
+	if err != nil {
+		return err
+	}
+	index, _, err := currentItem(svc, formID, itemID)
+	if err != nil {
+		return err
+	}
+	request := &forms.Request{DeleteItem: &forms.DeleteItemRequest{
+		Location: &forms.Location{Index: int64(index), ForceSendFields: []string{"Index"}}}}
+	_, err = gcal.Retry(func() (*forms.BatchUpdateFormResponse, error) {
+		return svc.Forms.BatchUpdate(formID, &forms.BatchUpdateFormRequest{Requests: []*forms.Request{request}}).Do()
+	})
+	return err
+}
+
+// formUpdate is the item with the edit applied and the update mask for it.
+func formUpdate(item *forms.Item, edit FormEdit) (*forms.Item, string, error) {
+	var mask []string
+	if edit.Title != nil {
+		item.Title = *edit.Title
+		mask = append(mask, "title")
+	}
+	if edit.Help != nil {
+		item.Description = *edit.Help
+		item.ForceSendFields = append(item.ForceSendFields, "Description")
+		mask = append(mask, "description")
+	}
+	if edit.Required != nil || edit.Options != nil {
+		if item.QuestionItem == nil {
+			return nil, "", errors.New("only questions can be required or have options")
+		}
+		q := item.QuestionItem.Question
+		if edit.Required != nil {
+			q.Required = *edit.Required
+			q.ForceSendFields = append(q.ForceSendFields, "Required")
+			mask = append(mask, "questionItem.question.required")
+		}
+		if edit.Options != nil {
+			if q.ChoiceQuestion == nil {
+				return nil, "", errors.New("only multiple choice, checkbox and dropdown questions have options")
+			}
+			if len(edit.Options) == 0 {
+				return nil, "", errors.New("a choice question needs at least one option")
+			}
+			var options []*forms.Option
+			for _, o := range edit.Options {
+				options = append(options, &forms.Option{Value: o})
+			}
+			for _, o := range q.ChoiceQuestion.Options {
+				if o.IsOther {
+					options = append(options, o)
+				}
+			}
+			q.ChoiceQuestion.Options = options
+			mask = append(mask, "questionItem.question.choiceQuestion.options")
+		}
+	}
+	if len(mask) == 0 {
+		return nil, "", errors.New("nothing to change")
+	}
+	return item, strings.Join(mask, ","), nil
+}
+
+// driveEditFormItem changes one item's title, help text, required or options.
+func driveEditFormItem(formID, itemID string, edit FormEdit) error {
+	svc, err := formsService()
+	if err != nil {
+		return err
+	}
+	index, item, err := currentItem(svc, formID, itemID)
+	if err != nil {
+		return err
+	}
+	updated, mask, err := formUpdate(item, edit)
+	if err != nil {
+		return err
+	}
+	request := &forms.Request{UpdateItem: &forms.UpdateItemRequest{Item: updated, UpdateMask: mask,
+		Location: &forms.Location{Index: int64(index), ForceSendFields: []string{"Index"}}}}
+	_, err = gcal.Retry(func() (*forms.BatchUpdateFormResponse, error) {
+		return svc.Forms.BatchUpdate(formID, &forms.BatchUpdateFormRequest{Requests: []*forms.Request{request}}).Do()
 	})
 	return err
 }

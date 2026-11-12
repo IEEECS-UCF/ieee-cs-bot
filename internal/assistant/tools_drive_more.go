@@ -3,6 +3,7 @@ package assistant
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
@@ -140,6 +141,94 @@ func (a *Ask) addFormQuestions(formID string, questions []FormQuestion) (string,
 			}
 			return fmt.Sprintf("Added %d question(s) to %s: %s", len(questions), name, formEditLink(fid)), nil
 		})
+}
+
+// findFormItem is the item an officer means: its number as read_google_form
+// lists it, or its exact title (case doesn't matter).
+func findFormItem(items []FormItem, ref string) (FormItem, error) {
+	ref = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "#"))
+	if n, err := strconv.Atoi(strings.TrimSuffix(ref, ".")); err == nil {
+		if n < 1 || n > len(items) {
+			return FormItem{}, fmt.Errorf("the form has %d items; there's no number %d", len(items), n)
+		}
+		return items[n-1], nil
+	}
+	var found []FormItem
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Title), ref) {
+			found = append(found, item)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return FormItem{}, fmt.Errorf("no question on the form is titled %q; use read_google_form and pass its number", ref)
+	}
+	return FormItem{}, fmt.Errorf("%d questions are titled %q; pass the number of the one you mean", len(found), ref)
+}
+
+func (a *Ask) formItem(formID, ref string) (string, string, FormItem, error) {
+	if err := needDrive(); err != nil {
+		return "", "", FormItem{}, err
+	}
+	fid := driveID(formID)
+	name, items, err := drive.formItems(fid)
+	if err != nil {
+		return "", "", FormItem{}, err
+	}
+	item, err := findFormItem(items, ref)
+	return fid, name, item, err
+}
+
+func (a *Ask) removeFormQuestion(formID, ref string) (string, error) {
+	fid, name, item, err := a.formItem(formID, ref)
+	if err != nil {
+		return "", err
+	}
+	return a.queue(fmt.Sprintf("remove this from the form **%s** (answers already given stay in its responses):\n> %s",
+		name, botkit.Cut(item.Line(), 300)), func() (string, error) {
+		if err := drive.removeFormItem(fid, item.ID); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Removed %q from %s: %s", item.Title, name, formEditLink(fid)), nil
+	})
+}
+
+func (a *Ask) editFormQuestion(formID, ref string, edit FormEdit) (string, error) {
+	fid, name, item, err := a.formItem(formID, ref)
+	if err != nil {
+		return "", err
+	}
+	var changes []string
+	if edit.Title != nil {
+		changes = append(changes, fmt.Sprintf("title → %q", *edit.Title))
+	}
+	if edit.Help != nil {
+		changes = append(changes, fmt.Sprintf("help text → %q", *edit.Help))
+	}
+	if edit.Required != nil {
+		changes = append(changes, map[bool]string{true: "required", false: "not required"}[*edit.Required])
+	}
+	if edit.Options != nil {
+		changes = append(changes, "options → "+strings.Join(edit.Options, " / "))
+	}
+	if len(changes) == 0 {
+		return "Nothing would change.", nil
+	}
+	if !item.Question && (edit.Required != nil || edit.Options != nil) {
+		return "", fmt.Errorf("%q is a %s, not a question", item.Title, item.Kind)
+	}
+	if edit.Options != nil && !item.Choice {
+		return "", fmt.Errorf("%q isn't a multiple choice, checkbox or dropdown question, so it has no options", item.Title)
+	}
+	return a.queue(fmt.Sprintf("change this question on the form **%s**:\n> %s\n%s", name, botkit.Cut(item.Line(), 300),
+		botkit.Cut(strings.Join(changes, "; "), 600)), func() (string, error) {
+		if err := drive.editFormItem(fid, item.ID, edit); err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Changed %q on %s: %s", item.Title, name, formEditLink(fid)), nil
+	})
 }
 
 // ---------- Sheets ----------

@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -141,5 +142,93 @@ func TestUnsharingFindsThePersonAndKeepsTheOwner(t *testing.T) {
 	}
 	if !reflect.DeepEqual(removed, []string{"p1", "p2"}) {
 		t.Errorf("%v", removed)
+	}
+}
+
+func formWith(t *testing.T) {
+	swapVar(t, &drive.formItems, func(string) (string, []FormItem, error) {
+		return "Fall Social RSVP", []FormItem{
+			{ID: "a1", Number: 1, Title: "Your name", Kind: "short answer", Question: true, Required: true},
+			{ID: "b2", Number: 2, Title: "Dietary restrictions?", Kind: "short answer", Question: true},
+			{ID: "c3", Number: 3, Title: "T-shirt size", Kind: "dropdown: S / M / L", Question: true, Choice: true},
+			{ID: "d4", Number: 4, Title: "Logistics", Kind: "section"},
+		}, nil
+	})
+}
+
+// Eren asked the EMBS bot to take a question off a form and it could only add
+// them. Removing names the exact question on the card and waits for Confirm.
+func TestAFormQuestionIsRemovedOnConfirm(t *testing.T) {
+	driveOn(t)
+	formWith(t)
+	var removed []string
+	swapVar(t, &drive.removeFormItem, func(form, item string) error { removed = append(removed, form+"/"+item); return nil })
+	a := &Ask{}
+	reply := callFile(t, a, "remove_form_question", `{"form_id": "https://docs.google.com/forms/d/1FormIdAbcXYZ/edit", "question": "dietary restrictions?"}`)
+	if !strings.HasPrefix(reply, "Queued:") || removed != nil {
+		t.Fatalf("%s", reply)
+	}
+	if s := a.Changes[0].Summary; !strings.Contains(s, "**Fall Social RSVP**") || !strings.Contains(s, "> 2. Dietary restrictions? (short answer)") {
+		t.Errorf("%s", s)
+	}
+	if _, err := a.Changes[0].Apply(); err != nil || !reflect.DeepEqual(removed, []string{"1FormIdAbcXYZ/b2"}) {
+		t.Errorf("%v %v", err, removed)
+	}
+	// By number, as read_google_form lists them
+	callFile(t, a, "remove_form_question", `{"form_id": "F1", "question": "1"}`)
+	if s := a.Changes[1].Summary; !strings.Contains(s, "> 1. Your name (short answer, required)") {
+		t.Errorf("%s", s)
+	}
+}
+
+func TestAFormQuestionIsEditedOnConfirm(t *testing.T) {
+	driveOn(t)
+	formWith(t)
+	var got FormEdit
+	var item string
+	swapVar(t, &drive.editFormItem, func(_, id string, e FormEdit) error { item, got = id, e; return nil })
+	a := &Ask{}
+	reply := callFile(t, a, "edit_form_question", `{"form_id": "F1", "question": "3", "options": ["S", "M", "L", "XL"], "required": true}`)
+	if !strings.HasPrefix(reply, "Queued:") || item != "" {
+		t.Fatalf("%s", reply)
+	}
+	s := a.Changes[0].Summary
+	if !strings.Contains(s, "> 3. T-shirt size (dropdown: S / M / L)") || !strings.Contains(s, "options → S / M / L / XL") ||
+		!strings.Contains(s, "required") {
+		t.Errorf("%s", s)
+	}
+	a.Changes[0].Apply()
+	if item != "c3" || !reflect.DeepEqual(got.Options, []string{"S", "M", "L", "XL"}) || got.Required == nil || !*got.Required ||
+		got.Title != nil {
+		t.Errorf("%s %+v", item, got)
+	}
+	// Options only on choice questions; required only on questions; unclear titles are errors
+	for _, bad := range []string{`{"form_id": "F1", "question": "2", "options": ["a"]}`,
+		`{"form_id": "F1", "question": "Logistics", "required": true}`,
+		`{"form_id": "F1", "question": "9", "title": "x"}`,
+		`{"form_id": "F1", "question": "Shoe size", "title": "x"}`} {
+		if out, err := a.Tool("edit_form_question", json.RawMessage(bad)); err == nil {
+			t.Errorf("%s -> %s", bad, out)
+		}
+	}
+	if len(a.Changes) != 1 {
+		t.Errorf("%d changes", len(a.Changes))
+	}
+}
+
+func TestFormUpdateMasksOnlyWhatChanges(t *testing.T) {
+	item := &forms.Item{ItemId: "c3", Title: "T-shirt size", QuestionItem: &forms.QuestionItem{Question: &forms.Question{
+		ChoiceQuestion: &forms.ChoiceQuestion{Type: "DROP_DOWN", Options: []*forms.Option{{Value: "S"}, {IsOther: true}}}}}}
+	no := false
+	updated, mask, err := formUpdate(item, FormEdit{Required: &no, Options: []string{"M", "L"}})
+	if err != nil || mask != "questionItem.question.required,questionItem.question.choiceQuestion.options" {
+		t.Fatalf("%v %s", err, mask)
+	}
+	opts := updated.QuestionItem.Question.ChoiceQuestion.Options
+	if len(opts) != 3 || opts[0].Value != "M" || !opts[2].IsOther || updated.ItemId != "c3" {
+		t.Errorf("%+v", opts)
+	}
+	if _, _, err := formUpdate(&forms.Item{Title: "x"}, FormEdit{}); err == nil {
+		t.Error("an empty edit went through")
 	}
 }

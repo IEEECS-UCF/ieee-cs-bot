@@ -81,6 +81,9 @@ var drive = struct {
 	addFormQuestions func(formID string, questions []FormQuestion) error
 	readForm         func(formID string) (string, error)
 	formResponses    func(formID string, limit int) (string, error)
+	formItems        func(formID string) (string, []FormItem, error)
+	removeFormItem   func(formID, itemID string) error
+	editFormItem     func(formID, itemID string, edit FormEdit) error
 	createSheet      func(title string, rows [][]string, folderID string) (string, error)
 	updateCells      func(sheetID, cellRange string, rows [][]string) error
 	addTab           func(sheetID, name string) error
@@ -93,7 +96,8 @@ var drive = struct {
 }{driveConfigured, driveSearch, driveInfo, driveRead, driveSheetValues, driveChangedDocuments, driveUpload,
 	driveCreateFolder, driveCreateDoc, driveAppendToDoc, driveAppendRows, driveMove, driveRename, driveCopy,
 	driveTrash, driveShare,
-	driveCreateForm, driveAddFormQuestions, driveReadForm, driveFormResponses, driveCreateSheet, driveUpdateCells,
+	driveCreateForm, driveAddFormQuestions, driveReadForm, driveFormResponses, driveFormItems, driveRemoveFormItem,
+	driveEditFormItem, driveCreateSheet, driveUpdateCells,
 	driveAddTab, driveReplaceInDoc, driveCreateSlides, driveSearchTrash, driveRestore, drivePermissions, driveUnshare}
 
 func driveConfigured() bool {
