@@ -213,19 +213,21 @@ func (a *Ask) editEvent(eventID string, title, date, tm, description *string) (s
 // event from it (and links the two), within calendarsync.LookaheadDays of the start; the
 // bot never makes the Discord event itself, because sync deletes bot-made
 // Discord events that aren't linked to the calendar. Only a confirmed room
-// goes on the calendar; a requested one is tracked on the card, as with
-// /officer events → New event.
+// goes on the calendar; a requested one (only when an officer says so) is
+// tracked on the card, as with /officer events → New event.
 func (a *Ask) createEvent(title, date, tm, room, roomStatus, description string) (string, error) {
 	title = eventtext.Normalize(title)
 	room = eventtext.Normalize(room)
 	if title == "" {
 		return "", fmt.Errorf("the event needs a title")
 	}
-	if room != "" && roomStatus != "confirmed" && roomStatus != "requested" {
-		return "", fmt.Errorf("say whether the room is confirmed or only requested (room_status)")
-	}
-	if room == "" {
+	switch {
+	case room == "":
 		roomStatus = ""
+	case roomStatus == "": // a room is confirmed unless an officer says it's only requested
+		roomStatus = "confirmed"
+	case roomStatus != "confirmed" && roomStatus != "requested":
+		return "", fmt.Errorf("room_status is confirmed or requested, not %q", roomStatus)
 	}
 	now := time.Now().In(TZ())
 	start, end, err := officer.ParseForm(date, tm, now)

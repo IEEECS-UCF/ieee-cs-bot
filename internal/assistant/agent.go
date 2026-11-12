@@ -61,7 +61,8 @@ Changes:
 - Deleting only moves things to Drive's or Notion's trash, where they can be restored.
 - Notion: new pages and databases go inside a page the bot can see, never at the top of the workspace. search_notion only matches titles, so to find an untitled database, read the page it's on (read_notion_page lists child databases with their ids). To change part of a page, use replace_in_notion_page or append_to_notion_page with after, rather than adding a second copy at the end.
 - "Set the room" means the room is confirmed, unless they say it's only requested.
-- New events: when an event isn't on the calendar yet (list_events finds nothing), queue it with create_event instead of saying it has to be added first. Don't create one that's already there; edit it. A booking that isn't final (e.g. Student Union "Details Pending", or "we asked for the room") is reserved but not confirmed: unless they said which, ask whether to mark the room confirmed or only requested before you queue it.
+- New events: when an event isn't on the calendar yet (list_events finds nothing), queue it with create_event instead of saying it has to be added first. Don't create one that's already there; edit it.
+- Rooms are confirmed unless an officer says the room is only requested or not booked yet. A UCF Student Union reservation confirmation (date, room, setup, often "Details Pending" in its title) means the room IS confirmed; "Details Pending" is about setup details, not the booking. Don't ask confirmed vs requested for those, and don't offer to mark them requested.
 - #announcements posts always go to other officers for review with send_announcement_for_review; never send_message there.
 - Reminders: set_reminder with the time in Eastern time, worked out from today's date. It pings whoever it's for (the asker unless they name someone; use find_member for their id) in this channel when it's due.
 - Messages: send_message posts in a channel as the bot, e.g. "tell @person ... in #general". Write mentions as <@user id> (find_member gives the id). It can't ping @everyone, @here or roles.
@@ -114,7 +115,7 @@ var Tools = func() []anthropic.BetaToolUnionParam {
 		tool("set_room", "Queue a room change. 'confirmed' also updates the calendar event's location (and Discord follows).",
 			schema{"event_id": str(), "room": str("e.g. ENG2 205"), "status": enum("confirmed", "requested")},
 			"event_id", "room", "status"),
-		tool("create_event", "Queue a new event on the chapter's Google Calendar, for one that isn't there yet (check list_events first). Discord's event follows from the calendar on its own. Give the room only with room_status: 'confirmed' puts it on the calendar, 'requested' (booked but not final) tracks it on the event's card and keeps the calendar at TBA.",
+		tool("create_event", "Queue a new event on the chapter's Google Calendar, for one that isn't there yet (check list_events first). Discord's event follows from the calendar on its own. A room is confirmed (and goes on the calendar) unless room_status is 'requested': only when an officer says the room is just requested or not booked yet. That tracks it on the event's card and keeps the calendar at TBA.",
 			schema{"title": str(), "date": str("MM/DD/YYYY"), "time": str("e.g. 6:30 PM-8:30 PM"), "room": str("e.g. ENG2 205"),
 				"room_status": enum("confirmed", "requested"), "description": str()}, "title", "date", "time"),
 		tool("edit_event", "Queue changes to an event's title, date, time or description in Google Calendar (Discord follows). Leave out what doesn't change.",

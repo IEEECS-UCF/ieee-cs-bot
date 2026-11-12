@@ -419,7 +419,7 @@ func TestNewEventsWaitForConfirm(t *testing.T) {
 	a, sync := makeAsk(t)
 	inserted := inserts(t)
 	reply, err := call(t, a, "create_event", map[string]any{"title": "Spring  Kickoff GBM", "date": dayAhead(10),
-		"time": "6:30 PM-8:30 PM", "room": "Egmont Key Room 224", "room_status": "requested", "description": "Meet the officers."})
+		"time": "6:30 PM-8:30 PM", "room": "ENG2 102", "room_status": "requested", "description": "Meet the officers."})
 	if err != nil || !strings.HasPrefix(reply, "Queued:") || len(*inserted) != 0 {
 		t.Fatalf("%q %v", reply, err) // nothing yet
 	}
@@ -427,7 +427,7 @@ func TestNewEventsWaitForConfirm(t *testing.T) {
 		t.Error(reply)
 	}
 	summary := a.Changes[0].Summary
-	if !strings.Contains(summary, "**Spring Kickoff GBM**") || !strings.Contains(summary, "Egmont Key Room 224 (requested") {
+	if !strings.Contains(summary, "**Spring Kickoff GBM**") || !strings.Contains(summary, "ENG2 102 (requested") {
 		t.Error(summary)
 	}
 	result, err := a.Changes[0].Apply() // what Confirm runs
@@ -440,7 +440,7 @@ func TestNewEventsWaitForConfirm(t *testing.T) {
 		t.Errorf("%+v %+v", body, body.Start)
 	}
 	room := store.EventStore{}.Get(body.Id).Room // a requested room is tracked on the card, not the calendar
-	if room == nil || room.Status != "requested" || room.Room != "Egmont Key Room 224" || room.By != asker {
+	if room == nil || room.Status != "requested" || room.Room != "ENG2 102" || room.By != asker {
 		t.Errorf("%+v", room)
 	}
 }
@@ -467,9 +467,8 @@ func TestNewEventChecks(t *testing.T) {
 	testutil.Setup(t)
 	a, _ := makeAsk(t, at("g1", "Spring Kickoff GBM", "ENG2 102", 70), at("g2", "Bash Night", "ENG2 205", 10))
 	inserts(t)
-	// A room needs a status
 	if _, err := call(t, a, "create_event", map[string]any{"title": "X", "date": dayAhead(5), "time": "6 PM",
-		"room": "ENG2 205"}); err == nil || !strings.Contains(err.Error(), "room_status") {
+		"room": "ENG2 205", "room_status": "maybe"}); err == nil || !strings.Contains(err.Error(), "room_status") {
 		t.Errorf("%v", err)
 	}
 	if _, err := call(t, a, "create_event", map[string]any{"title": "X", "date": dayAhead(-2), "time": "6 PM"}); err == nil ||
@@ -492,5 +491,26 @@ func TestNewEventChecks(t *testing.T) {
 	project, _ := call(t, a, "create_event", map[string]any{"title": "Project meeting", "date": dayAhead(3), "time": "5 PM"})
 	if !strings.Contains(project, "stay off Discord") {
 		t.Error(project)
+	}
+}
+
+// A Student Union confirmation ("Details Pending" in its title) is a confirmed
+// room: with no room_status the room is confirmed and goes on the calendar.
+func TestARoomIsConfirmedUnlessSaidOtherwise(t *testing.T) {
+	testutil.Setup(t)
+	a, _ := makeAsk(t)
+	inserted := inserts(t)
+	reply, err := call(t, a, "create_event", map[string]any{"title": "Spring Kickoff GBM", "date": dayAhead(10),
+		"time": "6:30 PM-8:30 PM", "room": "Egmont Key Room 224"})
+	if err != nil || !strings.Contains(a.Changes[0].Summary, "Egmont Key Room 224 (confirmed)") {
+		t.Fatalf("%q %v", reply, err)
+	}
+	a.Changes[0].Apply()
+	body := (*inserted)[0]
+	if body.Location != "Egmont Key Room 224" || (store.EventStore{}).Get(body.Id).Room.Status != "confirmed" {
+		t.Errorf("%+v", body)
+	}
+	if !strings.Contains(System, `"Details Pending" is about setup details, not the booking`) {
+		t.Error("the prompt doesn't say SU confirmations are confirmed rooms")
 	}
 }
