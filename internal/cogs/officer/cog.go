@@ -23,6 +23,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path"
 	"reflect"
 	"slices"
 	"sort"
@@ -620,6 +621,17 @@ func (c *Cog) closeTask(taskID string) error {
 // file is an attachment for a message.
 func file(name string, data []byte) *discordgo.File {
 	return &discordgo.File{Name: name, Reader: bytes.NewReader(data)}
+}
+
+// downloadable shows an image in the embed that officers can also save at
+// full size. Discord serves embed images through its media proxy, which saves
+// them as a shrunk .webp (Google Slides won't take it), so the embed shows a
+// "-preview" copy and the original goes along as a plain attachment.
+func downloadable(embed *discordgo.MessageEmbed, name string, data []byte) []*discordgo.File {
+	ext := path.Ext(name)
+	preview := strings.TrimSuffix(name, ext) + "-preview" + ext
+	embed.Image = &discordgo.MessageEmbedImage{URL: "attachment://" + preview}
+	return []*discordgo.File{file(preview, data), file(name, data)}
 }
 
 func who(ctx *botkit.Ctx) string {

@@ -240,8 +240,8 @@ func (k *card) doCopy(ctx *botkit.Ctx, e eventtext.Event, platform string) {
 	var files []*discordgo.File
 	if sync := k.cog.calendarSync(); platform == "knightconnect" && e.Flyer != "" && sync != nil {
 		if image := sync.DownloadFlyer(e.Flyer); len(image) > 0 {
-			files = append(files, file("flyer.png", image))
-			embed.Image = &discordgo.MessageEmbedImage{URL: "attachment://flyer.png"}
+			files = downloadable(embed, "flyer.png", image)
+			embed.Description += "\n📎 Upload the attached **flyer.png** (full size); the preview above is shrunk."
 		}
 	}
 	ctx.Followup(botkit.Reply{Embeds: []*discordgo.MessageEmbed{embed}, Files: files, Ephemeral: true})
@@ -484,10 +484,10 @@ func (k *card) doCheckin(ctx *botkit.Ctx, e eventtext.Event) {
 		}
 		lines = append(lines, "**How they heard:** "+strings.Join(parts, ", "))
 	}
+	lines = append(lines, "📎 Save the attached **checkin-qr.png** for slides or print (full size); the preview above is shrunk.")
 	embed := botkit.BaseEmbed("✅ Check-in: "+e.Name, strings.Join(lines, "\n"), botkit.IEEEBlue)
-	embed.Image = &discordgo.MessageEmbedImage{URL: "attachment://checkin-qr.png"}
-	ctx.Followup(botkit.Reply{Embeds: []*discordgo.MessageEmbed{embed}, Files: []*discordgo.File{file("checkin-qr.png", checkin.QRPNG(link))},
-		Ephemeral: true})
+	files := downloadable(embed, "checkin-qr.png", checkin.QRPNG(link))
+	ctx.Followup(botkit.Reply{Embeds: []*discordgo.MessageEmbed{embed}, Files: files, Ephemeral: true})
 	k.redraw(false)
 }
 
