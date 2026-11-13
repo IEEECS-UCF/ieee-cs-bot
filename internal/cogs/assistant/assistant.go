@@ -577,6 +577,9 @@ func (c *Cog) Ask(ctx *botkit.Ctx, question string) {
 	}
 	run := &assistant.Ask{Bot: c.bot, GuildID: ctx.I.GuildID, AskerID: ctx.UserID(), AskerName: name,
 		Knowledge: c.knowledge, ChannelID: ctx.I.ChannelID, Events: c.Events, CanSee: c.canSee(user.ID)}
+	if image := ctx.Attachment("image"); image != nil {
+		run.Attached = []*discordgo.MessageAttachment{image}
+	}
 	answer := run.Run(context.Background(), question)
 	logUsage("/officer ask", user, run)
 	convo := c.convos.start(run, ctx.I.ChannelID)

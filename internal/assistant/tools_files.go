@@ -32,9 +32,9 @@ func FileTools() []anthropic.BetaToolUnionParam {
 	return []anthropic.BetaToolUnionParam{
 		// Discord
 		tool("find_discord_files", "Recent messages with attachments in a channel or thread, newest first, with message links, file names and sizes. Use it to find e.g. 'the flyer I just posted in #marketing'.",
-			schema{"channel": str("Channel or thread name, e.g. marketing"),
+			schema{"channel": str("Channel or thread name, e.g. marketing; leave out for the channel or thread the question was asked in"),
 				"from_asker": schema{"type": "boolean", "description": "Only files the asker posted"},
-				"limit":      schema{"type": "integer", "minimum": 1, "maximum": 25}}, "channel"),
+				"limit":      schema{"type": "integer", "minimum": 1, "maximum": 25}}),
 		tool("view_discord_image", "Look at an image attached to a Discord message (a photo, screenshot or flyer) to read what's in it: a name and title on a business card or badge, text on a slide, a schedule. Pass the message link from find_discord_files, a search result or the conversation.",
 			schema{"message_url": s, "attachment": str("File name, or its number from find_discord_files; the first image if left out")}, "message_url"),
 		// Drive reads
@@ -508,6 +508,9 @@ var (
 	}
 	// channelMessages is one page of history, newest first, before beforeID.
 	channelMessages = func(b *botkit.Bot, channelID string, limit int, beforeID string) ([]*discordgo.Message, error) {
+		if b == nil || b.S == nil {
+			return nil, errors.New("not connected to Discord")
+		}
 		return b.S.ChannelMessages(channelID, limit, beforeID, "", "")
 	}
 	fetchMessage = func(b *botkit.Bot, channelID, messageID string) (*discordgo.Message, error) {

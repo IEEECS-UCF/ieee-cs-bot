@@ -66,17 +66,11 @@ func (a *Ask) viewDiscordImage(messageURL, which string) (string, error) {
 	if len(a.images) >= 4 {
 		return "", errors.New("only 4 images at a time; look at the rest in another call")
 	}
-	data, err := readAttachment(file)
+	block, w, h, err := loadImage(file)
 	if err != nil {
 		return "", err
 	}
-	data, mediaType, w, h, err := prepareImage(data)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", file.Filename, err)
-	}
-	a.images = append(a.images, anthropic.BetaToolResultBlockParamContentUnion{OfImage: &anthropic.BetaImageBlockParam{
-		Source: anthropic.BetaImageBlockParamSourceUnion{OfBase64: &anthropic.BetaBase64ImageSourceParam{
-			Data: base64.StdEncoding.EncodeToString(data), MediaType: anthropic.BetaBase64ImageSourceMediaType(mediaType)}}}})
+	a.images = append(a.images, anthropic.BetaToolResultBlockParamContentUnion{OfImage: block})
 	size := ""
 	if w > 0 {
 		size = fmt.Sprintf(", %d×%d", w, h)
@@ -87,6 +81,42 @@ func (a *Ask) viewDiscordImage(messageURL, which string) (string, error) {
 	}
 	return fmt.Sprintf("Image %s%s%s, from %s. It's attached below. Say only what you can actually read in it; if part is unreadable, say so.",
 		file.Filename, size, author, messageURL), nil
+}
+
+// loadImage downloads an image attachment and makes it something Claude reads.
+// A HEIC photo, or one too big to send, is fetched again through Discord's
+// media proxy as a JPEG (the proxy converts what Discord can preview), and
+// only if that fails too is it refused.
+func loadImage(file *discordgo.MessageAttachment) (*anthropic.BetaImageBlockParam, int, int, error) {
+	data, err := readAttachment(file)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	data, mediaType, w, h, err := prepareImage(data)
+	if err != nil && file.ProxyURL != "" {
+		converted := *file
+		converted.URL = proxyJPEG(file.ProxyURL)
+		if raw, perr := readAttachment(&converted); perr == nil {
+			if d, mt, pw, ph, perr := prepareImage(raw); perr == nil {
+				data, mediaType, w, h, err = d, mt, pw, ph, nil
+			}
+		}
+	}
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("%s: %w", file.Filename, err)
+	}
+	return &anthropic.BetaImageBlockParam{Source: anthropic.BetaImageBlockParamSourceUnion{OfBase64: &anthropic.BetaBase64ImageSourceParam{
+		Data: base64.StdEncoding.EncodeToString(data), MediaType: anthropic.BetaBase64ImageSourceMediaType(mediaType)}}}, w, h, nil
+}
+
+// proxyJPEG is the media proxy link for an image as a JPEG at most
+// maxImageSide wide.
+func proxyJPEG(proxyURL string) string {
+	sep := "?"
+	if strings.Contains(proxyURL, "?") {
+		sep = "&"
+	}
+	return fmt.Sprintf("%s%sformat=jpeg&width=%d", proxyURL, sep, maxImageSide)
 }
 
 // memberNameOf is a message author's display name in the server.

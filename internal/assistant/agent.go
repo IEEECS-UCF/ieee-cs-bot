@@ -56,7 +56,7 @@ Questions:
 Changes:
 - Find what you're changing first (list_events, search_drive, search_notion, find_discord_files), then call the change tool. Ask instead of guessing when the target or the change is unclear, e.g. when two folders could match.
 - To file something someone posted, find the message with find_discord_files, then save_discord_file_to_drive or add_discord_file_to_notion.
-- You can see images. When a question is about what's in a photo, screenshot or flyer posted in Discord (e.g. "add the person in this photo to Notion"), find the message (find_discord_files, or the link you were given) and look at it with view_discord_image, then use what it shows. Never say you can't see an image without trying it.
+- You can see images. When a question is about what's in a photo, screenshot or flyer posted in Discord (e.g. "add the person in this photo to Notion"), find the message (find_discord_files, or the link you were given) and look at it with view_discord_image, then use what it shows. Files posted in the channel just before the question are listed with it: "this" or "the screenshot" usually means the newest one there, so look at it before asking. Images attached to the question itself are shown with it. Never say you can't see an image without trying it.
 - Change tools don't change anything themselves. They queue the change, and it only happens when the officer who asked clicks Confirm under your reply. So describe what will change; never say it's done.
 - Deleting only moves things to Drive's or Notion's trash, where they can be restored.
 - Notion: new pages and databases go inside a page the bot can see, never at the top of the workspace. search_notion only matches titles, so to find an untitled database, read the page it's on (read_notion_page lists child databases with their ids). To change part of a page, use replace_in_notion_page or append_to_notion_page with after, rather than adding a second copy at the end.
@@ -167,9 +167,10 @@ type Ask struct {
 	AskerID   int64
 	AskerName string
 	Knowledge *Knowledge
-	ChannelID string                    // where /officer ask was run
-	Events    Events                    // the officer tools' event data; nil answers without it
-	NameOf    func(userID int64) string // a member's display name (tests); nil reads the guild
+	ChannelID string                         // where /officer ask was run
+	Attached  []*discordgo.MessageAttachment // images attached to the question itself
+	Events    Events                         // the officer tools' event data; nil answers without it
+	NameOf    func(userID int64) string      // a member's display name (tests); nil reads the guild
 	// CanSee is whether the asker can read a channel or thread. Answers only
 	// use what they can see, so nothing from a private thread or channel ends
 	// up quoted to them (nil: everything, in tests).
@@ -197,8 +198,69 @@ var NewMessage = func(ctx context.Context, params anthropic.BetaMessageNewParams
 func (a *Ask) Run(ctx context.Context, question string) string {
 	now := time.Now().In(TZ())
 	a.History = nil
-	return a.turn(ctx, fmt.Sprintf("Today is %s Eastern. Asked by %s.\n\n%s",
-		pytime.Strftime(now, "%A, %B %-d, %Y, %-I:%M %p"), a.AskerName, question))
+	head := fmt.Sprintf("Today is %s Eastern. Asked by %s", pytime.Strftime(now, "%A, %B %-d, %Y, %-I:%M %p"), a.AskerName)
+	if a.ChannelID != "" {
+		head += " in <#" + a.ChannelID + ">"
+	}
+	head += "."
+	var extra []anthropic.BetaContentBlockParamUnion
+	var attached []string
+	for _, f := range a.Attached {
+		if !isImage(f) {
+			continue
+		}
+		block, _, _, err := loadImage(f)
+		if err != nil {
+			attached = append(attached, fmt.Sprintf("%s (couldn't be read: %v)", f.Filename, err))
+			continue
+		}
+		attached = append(attached, f.Filename)
+		extra = append(extra, anthropic.BetaContentBlockParamUnion{OfImage: block})
+	}
+	if len(attached) > 0 {
+		head += "\nAttached to the question (shown below): " + strings.Join(attached, ", ")
+	}
+	if recent := a.recentFiles(now); recent != "" {
+		head += "\n" + recent
+	}
+	return a.turn(ctx, head+"\n\n"+question, extra...)
+}
+
+// RecentWindow is how far back the files posted in the channel before a
+// question are listed with it, so "this" can mean the screenshot just posted.
+const RecentWindow = 2 * time.Hour
+
+// recentFiles lists the files posted in the asking channel (or thread) shortly
+// before the question, newest first, with links for view_discord_image.
+func (a *Ask) recentFiles(now time.Time) string {
+	if a.ChannelID == "" || !a.sees(a.ChannelID) {
+		return ""
+	}
+	page, err := channelMessages(a.Bot, a.ChannelID, 25, "")
+	if err != nil {
+		log.Printf("/officer ask: couldn't read recent files in %s: %v", a.ChannelID, err)
+		return ""
+	}
+	var rows []string
+	for _, m := range page {
+		if len(m.Attachments) == 0 || now.Sub(m.Timestamp) > RecentWindow {
+			continue
+		}
+		var files []string
+		for _, f := range m.Attachments {
+			files = append(files, f.Filename)
+		}
+		ago := int(now.Sub(m.Timestamp).Minutes())
+		rows = append(rows, fmt.Sprintf("- %s | %s | %d min ago | %s", botkit.JumpURL(or(m.GuildID, a.GuildID), m.ChannelID, m.ID),
+			a.memberNameOf(m.Author), max(ago, 0), strings.Join(files, ", ")))
+		if len(rows) == 5 {
+			break
+		}
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	return "Files posted in this channel just before the question (newest first):\n" + strings.Join(rows, "\n")
 }
 
 // FollowUp continues a.History with an officer's reply. link is the reply's
@@ -212,9 +274,10 @@ func (a *Ask) FollowUp(ctx context.Context, text, link string, files []string) s
 	return a.turn(ctx, head+"):\n\n"+text)
 }
 
-func (a *Ask) turn(ctx context.Context, userText string) string {
+func (a *Ask) turn(ctx context.Context, userText string, extra ...anthropic.BetaContentBlockParamUnion) string {
 	// Clip so appending never writes into a stored conversation's array
-	messages := append(slices.Clip(a.History), anthropic.NewBetaUserMessage(anthropic.NewBetaTextBlock(userText)))
+	blocks := append([]anthropic.BetaContentBlockParamUnion{anthropic.NewBetaTextBlock(userText)}, extra...)
+	messages := append(slices.Clip(a.History), anthropic.NewBetaUserMessage(blocks...))
 	a.History = nil // set again only if this turn finishes cleanly
 	for range MaxTurns {
 		params := anthropic.BetaMessageNewParams{
