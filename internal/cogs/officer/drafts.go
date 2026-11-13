@@ -311,13 +311,9 @@ func (d *eventDraft) ask() string {
 }
 
 func (d *eventDraft) preview() string {
-	text, ai := d.current()
-	who := "draft"
-	if ai {
-		who = "draft, written by Claude"
-	}
-	return botkit.Cut(fmt.Sprintf("**#announcements %s** (check every detail; another officer has to "+
-		"approve it before it posts)%s\n```md\n%s\n```", who, revisionNote(d.revisions()), text), discordMessageLimit)
+	text, _ := d.current()
+	return botkit.Cut(fmt.Sprintf("**#announcements draft** (check every detail; another officer has to "+
+		"approve it before it posts)%s\n```md\n%s\n```", revisionNote(d.revisions()), text), discordMessageLimit)
 }
 
 // ---------- emergency posts (skip review, with a reason on record) ----------
@@ -408,17 +404,13 @@ func (g *generalDraft) sendEmergency(ctx *botkit.Ctx, text, reason string) (stri
 }
 
 func (g *generalDraft) preview() string {
-	text, ai := g.current()
-	who := "draft"
-	if ai {
-		who = "written by Claude (check every detail)"
-	}
+	text, _ := g.current()
 	pic := ""
 	if g.image != nil {
 		pic = "\nImage: " + g.image.Filename
 	}
-	return botkit.Cut(fmt.Sprintf("**#announcements %s** (another officer has to approve it before it posts)%s\n```md\n%s\n```%s",
-		who, revisionNote(g.revisions()), text, pic), discordMessageLimit)
+	return botkit.Cut(fmt.Sprintf("**#announcements draft** (check every detail; another officer has to approve it before it posts)%s\n```md\n%s\n```%s",
+		revisionNote(g.revisions()), text, pic), discordMessageLimit)
 }
 
 // ask is the officer's notes (what they typed first, if Claude never drafted it).

@@ -195,14 +195,16 @@ func TestAnAIDraftReplacesTheDraftAndStillNeedsReview(t *testing.T) {
 		t.Fatalf("draft %q ai %v opener %q", text, ai, opener)
 	}
 	if edits := tc.f.find("PATCH", `/webhooks/app/`+ctx.I.Token+`/messages/@original`); len(edits) != 1 ||
-		!strings.Contains(edits[0].content(), "written by Claude") {
-		t.Errorf("edits %v", contents(edits))
+		!strings.Contains(edits[0].content(), "AI text") || strings.Contains(edits[0].content(), "Claude") {
+		t.Errorf("edits %v", contents(edits)) // the draft never says who or what wrote it
 	}
 	text, _ := d.current()
 	d.sendOnce(press(tc.bot, author), text)
 	saved := off.GetReview("g1", "announcement")
-	if !saved.AI || saved.Status != off.Pending || !strings.Contains(off.StatusLine("announcement", saved, ""), "with AI") {
-		t.Errorf("saved %+v", saved)
+	// The review card says which officer wrote it, never that AI did
+	if line := off.StatusLine("announcement", saved, ""); saved.Status != off.Pending ||
+		!strings.Contains(line, "Written by <@1>") || strings.Contains(line, "AI") {
+		t.Errorf("saved %+v: %s", saved, line)
 	}
 	if off.Edited(saved, "changed", other).AI {
 		t.Error("an edit by hand still says AI")
@@ -290,7 +292,7 @@ func TestAIWritesAGeneralAnnouncementFromNotes(t *testing.T) {
 	if !slices.Equal(notesSeen, []string{"gbm moved to thu, bring laptops", "gbm moved to thu, bring laptops"}) || text != "Post #2" || !ai {
 		t.Errorf("notes %q, draft %q, ai %v", notesSeen, text, ai)
 	}
-	if !strings.Contains(tc.f.lastSaid(last), "written by Claude") {
+	if shown := tc.f.lastSaid(last); !strings.Contains(shown, "Post #2") || strings.Contains(shown, "Claude") {
 		t.Errorf("shown %q", tc.f.said(last))
 	}
 	if strings.Contains(aidraft.FromNotes("gbm moved"), "Office") || !strings.Contains(aidraft.FromNotes("gbm moved"), "gbm moved") {

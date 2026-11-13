@@ -145,7 +145,7 @@ func TestUnknownEventsAreErrorsNotChanges(t *testing.T) {
 
 func TestReadingTools(t *testing.T) {
 	testutil.Setup(t)
-	a, _ := makeAsk(t, ev("v1", "Intro to Vulkan", "ENG2 205", 3), ev("old", "Old", "ENG2 205", -30))
+	a, _ := makeAsk(t, at("v1", "Intro to Vulkan", "ENG2 205", 3), at("old", "Old", "ENG2 205", -30))
 	listed, _ := call(t, a, "list_events", map[string]any{})
 	if !strings.Contains(listed, "v1 | Intro to Vulkan") || strings.Contains(listed, "Old") {
 		t.Error(listed)

@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
-
-	"github.com/IEEECS-UCF/ieee-cs-bot/internal/eventtext"
 )
 
 const (
@@ -43,14 +41,12 @@ type EventReminders interface {
 	RunSoon()
 }
 
-// Officer is the officer tools cog (internal/cogs/officer): the forum posts
-// reviews go in.
+// Officer is the officer tools cog (internal/cogs/officer): the channel
+// review cards go in.
 type Officer interface {
-	// EventPost is the event's post in the nudge forum, made if needed; nil
-	// when there's no forum set up.
-	EventPost(e eventtext.Event) (*discordgo.Channel, error)
-	// GeneralPost is the shared "General announcements" post.
-	GeneralPost() (*discordgo.Channel, error)
+	// ReviewChannel is where every review card is posted (#quality-assurance);
+	// nil when there's none.
+	ReviewChannel() (*discordgo.Channel, error)
 }
 
 // Assistant is the /officer ask cog (internal/cogs/assistant): its cache of

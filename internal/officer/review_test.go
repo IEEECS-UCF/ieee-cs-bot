@@ -36,7 +36,7 @@ type edit struct {
 	e                botkit.Edit
 }
 
-// fakeDiscord stands in for the forum post (thread 50) and the
+// fakeDiscord stands in for #quality-assurance (channel 50) and the
 // announcements channel (9).
 type fakeDiscord struct {
 	fail     bool
@@ -45,11 +45,8 @@ type fakeDiscord struct {
 	channels map[string]*discordgo.Channel
 }
 
-func (f *fakeDiscord) EventPost(eventtext.Event) (*discordgo.Channel, error) {
-	return &discordgo.Channel{ID: "50", GuildID: "1"}, nil
-}
-func (f *fakeDiscord) GeneralPost() (*discordgo.Channel, error) {
-	return f.EventPost(eventtext.Event{})
+func (f *fakeDiscord) ReviewChannel() (*discordgo.Channel, error) {
+	return &discordgo.Channel{ID: "50", GuildID: "1", Name: "quality-assurance"}, nil
 }
 
 func (f *fakeDiscord) to(channel string) []sent {
@@ -299,8 +296,10 @@ func TestAnAIDraftStillNeedsReview(t *testing.T) {
 	OpenReview(b, event(), "announcement", "# Hey <@&111>!\nAI text", &author,
 		ReviewOptions{Extra: func(r *store.Review) { r.AI = true }})
 	saved := GetReview("g1", "announcement")
-	if !saved.AI || saved.Status != Pending || !strings.Contains(StatusLine("announcement", saved, ""), "with AI") {
-		t.Errorf("%+v", saved)
+	// Still needs another officer; the card credits the officer, never AI
+	if line := StatusLine("announcement", saved, ""); !saved.AI || saved.Status != Pending ||
+		!strings.Contains(line, "Written by <@1>") || strings.Contains(line, "AI") {
+		t.Errorf("%+v: %s", saved, line)
 	}
 	if Edited(saved, "changed", other).AI {
 		t.Error("edited text still marked AI")

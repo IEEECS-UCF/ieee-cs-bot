@@ -27,10 +27,10 @@ import (
 //	record.Reviews[kind] = {
 //	    "text": what will be posted,
 //	    "editor": user id of whoever wrote or last edited it (null: the bot wrote it),
-//	    "ai": the editor started from a "Draft with AI" draft,
+//	    "ai": the editor started from a "Draft with AI" draft (kept, never shown),
 //	    "status": "pending" | "approved" | "posted" | "missed" | "cancelled" (with "why"),
 //	    "approver": user id, "posted": jump url,
-//	    "message": [thread id, message id],   // the review message in the event's post
+//	    "message": [channel id, message id],  // the review message in #quality-assurance
 //	    "name": the event's name, "for": event start (reminders), so a moved event gets a fresh review,
 //	    "flyer": the calendar's flyer link, "has_flyer": whether an image is attached to the review
 //	             message (approving an announcement posts that same attachment with the text),
@@ -38,9 +38,9 @@ import (
 //	    "emergency": the reason, when an officer posted it right away without review,
 //	}
 //
-// and as a message with Approve / Edit buttons in the event's post in the nudge forum.
-// General announcements (/officer announce) aren't tied to an event: they're stored
-// under a "general_<id>" key and reviewed in one "General announcements" post.
+// and as a message with Approve / Edit buttons in #quality-assurance (never in
+// the event's thread). General announcements (/officer announce) aren't tied to
+// an event: they're stored under a "general_<id>" key and reviewed there too.
 // Announcements post as soon as they're approved. Day-of reminders post at
 // REMINDER_HOUR on the day, and only if approved by then (or as soon as they are,
 // before the event starts).
@@ -232,9 +232,6 @@ func StatusLine(kind string, r *store.Review, when string) string {
 	by := "the bot, from the calendar"
 	if r.Editor != nil && *r.Editor != 0 {
 		by = fmt.Sprintf("<@%d>", *r.Editor)
-		if r.AI {
-			by += " with AI"
-		}
 	}
 	at := ""
 	if when != "" {
@@ -338,15 +335,14 @@ type ReviewOptions struct {
 	ImageName string                                              // FlyerFile if ""
 }
 
+// reviewThread is the channel review cards go in (#quality-assurance), never
+// the event's thread.
 func reviewThread(b *botkit.Bot, e eventtext.Event, kind string) (*discordgo.Channel, error) {
 	cog, ok := b.Cog(cogapi.OfficerName).(cogapi.Officer)
 	if !ok || cog == nil {
 		return nil, nil
 	}
-	if kind == "general" {
-		return cog.GeneralPost()
-	}
-	return cog.EventPost(e)
+	return cog.ReviewChannel()
 }
 
 func jumpURL(channel *discordgo.Channel, m *discordgo.Message) string {
@@ -357,9 +353,8 @@ func jumpURL(channel *discordgo.Channel, m *discordgo.Message) string {
 	return botkit.JumpURL(guild, m.ChannelID, m.ID)
 }
 
-// OpenReview posts a new review in the event's post (general announcements:
-// the shared post) and stores it, replacing any older one. It returns the
-// review and the review message's link, or nil and why not; err is Discord
+// OpenReview posts a new review in #quality-assurance and stores it,
+// replacing any older one. It returns the review and the review message's link, or nil and why not; err is Discord
 // refusing the message.
 func OpenReview(b *botkit.Bot, e eventtext.Event, kind, text string, editor *int64, o ReviewOptions) (*store.Review, string, error) {
 	text = WithRoleMentions(b, text)
@@ -371,7 +366,7 @@ func OpenReview(b *botkit.Bot, e eventtext.Event, kind, text string, editor *int
 		return nil, "", err
 	}
 	if thread == nil {
-		return nil, "There's no event-planning channel set up (NUDGE_CHANNEL_ID), so there's nowhere to review it.", nil
+		return nil, "There's no #quality-assurance channel (or REVIEW_CHANNEL_ID), so there's nowhere to review it.", nil
 	}
 	if o.ImageName == "" {
 		o.ImageName = FlyerFile

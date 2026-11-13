@@ -188,7 +188,7 @@ type nudgeState struct {
 	Threads map[string]flexID        `json:"threads"`
 	Day     *string                  `json:"day"`
 	Status  map[string]statusMessage `json:"status,omitempty"`
-	General flexID                   `json:"general,omitempty"`
+	General flexID                   `json:"general,omitempty"` // the old "General announcements" review post; unused
 	Extra   store.Extra              `json:"-"`
 }
 
@@ -584,74 +584,37 @@ func (c *Cog) showStatus(thread *discordgo.Channel, gid, text string, state *nud
 	})
 }
 
-// GeneralPost is the "General announcements" post in the nudge channel,
-// where announcements that aren't for one event wait for approval. Created on
-// first use; nil without a nudge channel.
-func (c *Cog) GeneralPost() (*discordgo.Channel, error) {
-	channel := c.channel(c.nudgeChannelID)
-	if channel == nil {
-		return nil, nil
+// ReviewChannelName is where review cards go when REVIEW_CHANNEL_ID isn't set.
+const ReviewChannelName = "quality-assurance"
+
+// guildChannels is the guild's channels (swapped in tests).
+var guildChannels = func(b *botkit.Bot, guildID string) ([]*discordgo.Channel, error) {
+	if g, err := b.S.State.Guild(guildID); err == nil && len(g.Channels) > 0 {
+		b.S.State.RLock()
+		defer b.S.State.RUnlock()
+		return append([]*discordgo.Channel(nil), g.Channels...), nil
 	}
-	c.postMu.Lock()
-	defer c.postMu.Unlock()
-	state := loadNudges()
-	if state.General != 0 {
-		if thread := c.bot.Channel(botkit.S(int64(state.General))); thread != nil {
-			if !archived(thread) {
-				return thread, nil
-			}
-			if err := c.unarchive(thread); err == nil {
-				return thread, nil
-			}
-		}
+	return b.S.GuildChannels(guildID)
+}
+
+// ReviewChannel is where every review card goes (announcements, general
+// announcements, day-of reminders): REVIEW_CHANNEL_ID, or the text channel
+// named #quality-assurance. Nil when there's neither.
+func (c *Cog) ReviewChannel() (*discordgo.Channel, error) {
+	if id := botkit.Env("REVIEW_CHANNEL_ID", ""); id != "" {
+		return c.channel(botkit.ID(id)), nil
 	}
-	posts, err := c.recentPosts(channel)
+	channels, err := guildChannels(c.bot, botkit.GuildID())
 	if err != nil {
 		return nil, err
 	}
-	thread := MatchingPost(posts, []string{GeneralPost})
-	switch {
-	case thread != nil:
-		if archived(thread) {
-			if err := c.unarchive(thread); err != nil {
-				return nil, err
-			}
-		}
-	case channel.Type == discordgo.ChannelTypeGuildForum:
-		var tags []string
-		var tag *discordgo.ForumTag
-		for i := range channel.AvailableTags {
-			if strings.ToLower(channel.AvailableTags[i].Name) == "general" {
-				tag = &channel.AvailableTags[i]
-				break
-			}
-		}
-		if tag == nil && len(channel.AvailableTags) > 0 {
-			tag = &channel.AvailableTags[0]
-		}
-		if tag != nil {
-			tags = []string{tag.ID}
-		}
-		thread, err = c.bot.S.ForumThreadStartComplex(channel.ID, &discordgo.ThreadStart{Name: GeneralPost, AppliedTags: tags},
-			&discordgo.MessageSend{Content: "Announcements that aren't for one event wait here until another officer approves them."})
-		if err != nil {
-			return nil, err
-		}
-	default:
-		starter, err := c.bot.S.ChannelMessageSendComplex(channel.ID, &discordgo.MessageSend{
-			Content: fmt.Sprintf("📌 **%s**: announcements that aren't for one event wait in this thread.", GeneralPost)})
-		if err != nil {
-			return nil, err
-		}
-		if thread, err = c.bot.S.MessageThreadStartComplex(channel.ID, starter.ID, &discordgo.ThreadStart{Name: GeneralPost}); err != nil {
-			return nil, err
+	for _, ch := range channels {
+		if (ch.Type == discordgo.ChannelTypeGuildText || ch.Type == discordgo.ChannelTypeGuildNews) &&
+			strings.EqualFold(ch.Name, ReviewChannelName) {
+			return ch, nil
 		}
 	}
-	id := flexID(botkit.ID(thread.ID))
-	if err := saveNudges(&state, func(s *nudgeState) { s.General = id }); err != nil {
-		return nil, err
-	}
-	return thread, nil
+	return nil, nil
 }
 
 // EventPost is the event's post in the nudge channel (created if needed), or

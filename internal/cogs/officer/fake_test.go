@@ -299,13 +299,12 @@ func (s *fakeSync) SyncSoon(d time.Duration)    { s.soon = append(s.soon, d) }
 
 var flyerBytes []byte
 
-// fakePoster stands in for the cog's forum posts: every review goes to thread 50.
+// fakePoster stands in for #quality-assurance: every review goes to channel 50.
 type fakePoster struct{}
 
-func (fakePoster) EventPost(eventtext.Event) (*discordgo.Channel, error) {
-	return &discordgo.Channel{ID: "50", GuildID: "1"}, nil
+func (fakePoster) ReviewChannel() (*discordgo.Channel, error) {
+	return &discordgo.Channel{ID: "50", GuildID: "1", Name: "quality-assurance"}, nil
 }
-func (p fakePoster) GeneralPost() (*discordgo.Channel, error) { return p.EventPost(eventtext.Event{}) }
 
 type testCog struct {
 	*Cog

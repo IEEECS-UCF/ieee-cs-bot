@@ -59,7 +59,6 @@ const (
 	TablingAlertAfter   = 3 // sheet checks (30 min apart) in a row that fail before alerting
 	TablingTaskDays     = 14
 	TablingNamesDays    = 60
-	GeneralPost         = "General announcements"
 	PostLookbackDays    = 90 // archived posts older than this belong to some earlier event
 	syncDelay           = 5 * time.Second
 	discordMessageLimit = 2000

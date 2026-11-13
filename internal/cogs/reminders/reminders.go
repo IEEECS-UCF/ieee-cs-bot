@@ -2,8 +2,8 @@
 // event, once an officer approves it. (bot/cogs/event_reminders.py; the rules
 // are in internal/officer/reminders.go)
 //
-// At REVIEW_HOUR the day before, the reminder goes up for review in the
-// event's post in the nudge forum (internal/officer/review.go). If an officer
+// At REVIEW_HOUR the day before, the reminder goes up for review in
+// #quality-assurance (internal/officer/review.go). If an officer
 // approves it, it posts once in REMINDER_CHANNEL_ID at REMINDER_HOUR on the
 // day (or as soon as it's approved, until the event starts). Unapproved
 // reminders never post. Sent reminders are kept in the state file so
