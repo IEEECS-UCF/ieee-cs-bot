@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -689,4 +690,46 @@ func driveUnshare(fileID, permissionID string) error {
 	}
 	_, err = gcal.Retry(func() (struct{}, error) { return struct{}{}, svc.Permissions.Delete(fileID, permissionID).Do() })
 	return err
+}
+
+// DriveImage downloads an image file with the Drive sign-in, for calendar
+// flyers (calendarsync.DriveImage). It checks the file is an image and no
+// bigger than maxBytes before downloading it.
+func DriveImage(fileID string, maxBytes int) ([]byte, error) {
+	if !drive.configured() {
+		return nil, errors.New("the Drive sign-in isn't set up")
+	}
+	return driveImage(fileID, maxBytes)
+}
+
+var driveImage = func(fileID string, maxBytes int) ([]byte, error) {
+	svc, err := driveService()
+	if err != nil {
+		return nil, err
+	}
+	f, err := gcal.Retry(func() (*drivev3.File, error) {
+		return svc.Files.Get(fileID).Fields("name,mimeType,size").SupportsAllDrives(true).Do()
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(f.MimeType, "image/") {
+		return nil, fmt.Errorf("%s isn't an image (%s)", f.Name, f.MimeType)
+	}
+	if f.Size > int64(maxBytes) {
+		return nil, fmt.Errorf("%s is over %d MB", f.Name, maxBytes/1024/1024)
+	}
+	resp, err := svc.Files.Get(fileID).SupportsAllDrives(true).Download()
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, int64(maxBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxBytes {
+		return nil, fmt.Errorf("%s is over %d MB", f.Name, maxBytes/1024/1024)
+	}
+	return data, nil
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/access"
+	assistantpkg "github.com/IEEECS-UCF/ieee-cs-bot/internal/assistant"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/botkit"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogapi"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/assistant"
@@ -49,6 +50,8 @@ func main() {
 		log.Fatal(err)
 	}
 	botkit.Blocked = access.Has
+	// Flyers shared as Drive links download with the bot's Drive sign-in
+	calendarsync.DriveImage = assistantpkg.DriveImage
 	for _, setup := range cogs {
 		setup(b)
 	}

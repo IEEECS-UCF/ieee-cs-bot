@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -806,6 +807,39 @@ func (c *Cog) importDiscordEvents(discordEvents map[int64]*event, calendarTZ str
 	return nil
 }
 
+// flyerHTTP fetches flyer links (swapped in tests).
+var flyerHTTP = &http.Client{Timeout: 30 * time.Second}
+
+// DriveImage downloads an image from Google Drive with the bot's Drive
+// sign-in, so a flyer shared as a Drive link (or attached to the calendar
+// event) works even when the file isn't public. It refuses files that aren't
+// images or are over maxBytes. main sets it (internal/assistant); nil leaves
+// Drive links to plain HTTP.
+var DriveImage func(fileID string, maxBytes int) ([]byte, error)
+
+var (
+	drivePathID  = regexp.MustCompile(`/(?:file/)?d/([\w-]{10,})`)
+	driveQueryID = regexp.MustCompile(`[?&]id=([\w-]{10,})`)
+)
+
+// DriveFileID is the file ID in a Google Drive link (file/d/<id>/view,
+// open?id=, uc?id= or uc?export=download&id=, with any usp=drivesdk or
+// sharing), or "" if it isn't one.
+func DriveFileID(link string) string {
+	low := strings.ToLower(link)
+	if !strings.Contains(low, "drive.google.com/") && !strings.Contains(low, "docs.google.com/uc") &&
+		!strings.Contains(low, "drive.usercontent.google.com/") {
+		return ""
+	}
+	if m := drivePathID.FindStringSubmatch(link); m != nil {
+		return m[1]
+	}
+	if m := driveQueryID.FindStringSubmatch(link); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 // DownloadFlyer is the cog's flyer download (cogapi.CalendarSync).
 func (c *Cog) DownloadFlyer(url string) []byte { return c.download(url) }
 
@@ -815,8 +849,18 @@ func DownloadFlyer(url string) []byte {
 	if url == "" {
 		return nil
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
+	if id := DriveFileID(url); id != "" {
+		if DriveImage != nil {
+			data, err := DriveImage(id, flyerMaxBytes)
+			if err == nil {
+				return data
+			}
+			log.Printf("Couldn't get flyer %s from Drive: %v", url, err)
+		}
+		// Without the Drive sign-in, a public file still downloads from here
+		url = "https://drive.google.com/uc?export=download&id=" + id
+	}
+	resp, err := flyerHTTP.Get(url)
 	if err != nil {
 		log.Printf("Couldn't download flyer %s: %v", url, err)
 		return nil

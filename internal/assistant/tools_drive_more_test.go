@@ -232,3 +232,15 @@ func TestFormUpdateMasksOnlyWhatChanges(t *testing.T) {
 		t.Error("an empty edit went through")
 	}
 }
+
+func TestDriveImageNeedsTheSignIn(t *testing.T) {
+	swapVar(t, &drive.configured, func() bool { return false })
+	if _, err := DriveImage("1AbCdEfGhIjKlMnOpQrStUv", 100); err == nil {
+		t.Error("downloaded without the Drive sign-in")
+	}
+	swapVar(t, &drive.configured, func() bool { return true })
+	swapVar(t, &driveImage, func(id string, max int) ([]byte, error) { return []byte(id), nil })
+	if got, err := DriveImage("abc", 100); err != nil || string(got) != "abc" {
+		t.Errorf("%q %v", got, err)
+	}
+}
