@@ -284,12 +284,16 @@ type VolunteerTask struct {
 	Claimed []int64
 	Slots   int
 	Open    bool
+	// Date is the day the task is for (a tabling session's date); zero when
+	// the task has none. Tasks for days already past aren't shown.
+	Date time.Time
 }
 
-func TaskLines(tasks []VolunteerTask) []string {
+func TaskLines(tasks []VolunteerTask, today time.Time) []string {
+	today = Day(today)
 	var lines []string
 	for _, t := range tasks {
-		if !t.Open {
+		if !t.Open || (!t.Date.IsZero() && daysBetween(t.Date, today) < 0) {
 			continue
 		}
 		var who []string
@@ -345,7 +349,7 @@ func ChapterEmbeds(tablingRows []TablingRow, tasks []VolunteerTask, today time.T
 	embeds := []*discordgo.MessageEmbed{
 		BuildEmbed("⏰ Deadlines", DeadlineLines(today), botkit.IEEEGold, ""),
 		BuildEmbed("🪧 Tabling", tablingText, botkit.IEEEBlue, ""),
-		BuildEmbed("🙋 Volunteer tasks", TaskLines(tasks), botkit.IEEEBlue, ""),
+		BuildEmbed("🙋 Volunteer tasks", TaskLines(tasks, today), botkit.IEEEBlue, ""),
 	}
 	if membership != nil {
 		embeds = append(embeds, BuildEmbed("🪪 IEEE members",

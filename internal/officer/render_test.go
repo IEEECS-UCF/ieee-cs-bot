@@ -190,3 +190,48 @@ func TestButtonsKeepThePythonCustomIDs(t *testing.T) {
 		t.Errorf("%d buttons in %d rows, first %+v", count, len(rows), first)
 	}
 }
+
+func TestOrphanListingsSkipsPastEvents(t *testing.T) {
+	testutil.Setup(t)
+	now := time.Date(2026, 11, 15, 10, 0, 0, 0, TZ())
+	at := func(day int) string { return pytime.Isoformat(time.Date(2026, 11, day, 18, 0, 0, 0, TZ())) }
+	listings := []*Listing{
+		{ID: "past", Title: "Trick or TECH", StartsOn: pytime.Isoformat(time.Date(2026, 10, 27, 18, 0, 0, 0, TZ()))},
+		{ID: "yesterday", Title: "Yesterday", StartsOn: at(14)},
+		{ID: "today", Title: "Today", StartsOn: at(15)},
+		{ID: "soon", Title: "Soon", StartsOn: at(20)},
+		{ID: "taken", Title: "Matched", StartsOn: at(20)},
+	}
+	var got []string
+	for _, l := range OrphanListings(listings, map[string]bool{"taken": true}, now) {
+		got = append(got, l.ID)
+	}
+	if strings.Join(got, ",") != "today,soon" {
+		t.Errorf("orphans = %v", got)
+	}
+}
+
+func TestTaskLinesSkipsPastDays(t *testing.T) {
+	testutil.Setup(t)
+	today := time.Date(2026, 11, 15, 10, 0, 0, 0, TZ())
+	day := func(d int) time.Time { return time.Date(2026, 11, d, 0, 0, 0, 0, time.UTC) }
+	lines := TaskLines([]VolunteerTask{
+		{Title: "Table: Past (Fri Nov 13)", Slots: 2, Open: true, Date: day(13)},
+		{Title: "Table: Today", Slots: 2, Open: true, Date: day(15)},
+		{Title: "Table: Soon", Slots: 2, Open: true, Date: day(20)},
+		{Title: "Bring snacks", Slots: 1, Open: true},
+		{Title: "Closed", Slots: 1, Open: false, Date: day(20)},
+	}, today)
+	text := strings.Join(lines, "\n")
+	if strings.Contains(text, "Past") || strings.Contains(text, "Closed") {
+		t.Error(text)
+	}
+	for _, want := range []string{"Table: Today", "Table: Soon", "Bring snacks"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in %s", want, text)
+		}
+	}
+	if got := TaskLines([]VolunteerTask{{Title: "Old", Open: true, Date: day(1)}}, today); len(got) != 1 || got[0] != "No open volunteer tasks." {
+		t.Error(got)
+	}
+}

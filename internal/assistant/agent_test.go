@@ -23,10 +23,12 @@ import (
 
 const asker = 1
 
-var fixtureNow = time.Date(2026, 11, 2, 12, 0, 0, 0, testutil.TZ)
+// fixtureNow is today: the tools read the real clock, so event dates are
+// relative to it (a fixed date goes stale once its window passes).
+var fixtureNow = time.Now().In(testutil.TZ)
 
 func ev(gid, name, location string, days int) eventtext.Event {
-	start := time.Date(2026, 11, 2+days, 18, 30, 0, 0, testutil.TZ)
+	start := time.Date(fixtureNow.Year(), fixtureNow.Month(), fixtureNow.Day()+days, 18, 30, 0, 0, testutil.TZ)
 	return eventtext.Event{ID: gid, Name: name, Location: location, Start: start, End: start.Add(2 * time.Hour),
 		Description: "Learn bash.", Flyer: "https://example.com/flyer.png"}
 }

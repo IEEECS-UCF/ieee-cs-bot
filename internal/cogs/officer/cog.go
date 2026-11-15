@@ -388,9 +388,23 @@ func tablingRows() ([]off.TablingRow, string) {
 func volunteerTasks() []off.VolunteerTask {
 	var out []off.VolunteerTask
 	for _, t := range volunteer.LoadTasks().List() {
-		out = append(out, off.VolunteerTask{Title: t.Title, Claimed: t.Claimed, Slots: t.Slots, Open: t.Open})
+		out = append(out, off.VolunteerTask{Title: t.Title, Claimed: t.Claimed, Slots: t.Slots, Open: t.Open, Date: taskDate(t)})
 	}
 	return out
+}
+
+// taskDate is the day a tabling task is for, read from its key
+// ("tabling|2026-11-06|3:00 PM - 5:00 PM"); zero for any other task.
+func taskDate(t *volunteer.Task) time.Time {
+	parts := strings.Split(t.KeyText(), "|")
+	if len(parts) < 2 || parts[0] != "tabling" {
+		return time.Time{}
+	}
+	d, err := time.Parse("2006-01-02", parts[1])
+	if err != nil {
+		return time.Time{}
+	}
+	return d
 }
 
 func (c *Cog) chapterEmbeds() []*discordgo.MessageEmbed {

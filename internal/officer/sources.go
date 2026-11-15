@@ -581,18 +581,26 @@ func fetchKnightConnect(events []eventtext.Event, records map[string]*store.Reco
 			used[m.ID] = true
 		}
 	}
-	now := time.Now().In(TZ())
-	snap.KnightConnectOrphans = nil
+	snap.KnightConnectOrphans = OrphanListings(listings, used, time.Now().In(TZ()))
+	return nil
+}
+
+// OrphanListings is our KnightConnect listings that no calendar event matches
+// and that haven't happened yet. A listing from a day already past is left
+// out: there's nothing left to add to the calendar for it.
+func OrphanListings(listings []*Listing, used map[string]bool, now time.Time) []*Listing {
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	var out []*Listing
 	for _, l := range listings {
 		start, err := parseListingTime(l.StartsOn)
 		if used[l.ID] || err != nil {
 			continue
 		}
-		if !start.Before(now.AddDate(0, 0, -WindowBackDays)) && !start.After(now.AddDate(0, 0, WindowAheadDays)) {
-			snap.KnightConnectOrphans = append(snap.KnightConnectOrphans, l)
+		if !start.Before(today) && !start.After(now.AddDate(0, 0, WindowAheadDays)) {
+			out = append(out, l)
 		}
 	}
-	return nil
+	return out
 }
 
 func fetchVTools(events []eventtext.Event, records map[string]*store.Record, snap *Snapshot) error {

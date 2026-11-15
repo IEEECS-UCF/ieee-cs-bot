@@ -169,3 +169,15 @@ func TestClosedShiftStaysClosedEvenIfItsPostIsGone(t *testing.T) {
 		t.Errorf("posted %v, err %v", posted, err)
 	}
 }
+
+func TestTaskDateFromTablingKey(t *testing.T) {
+	task := volunteer.NewTask("Table", "", "", 2, 9, "tabling|2026-11-06|3:00 PM - 5:00 PM")
+	if d := taskDate(task); d.Format("2006-01-02") != "2026-11-06" {
+		t.Errorf("date = %v", d)
+	}
+	for _, key := range []string{"", "other|2026-11-06", "tabling|nonsense"} {
+		if d := taskDate(volunteer.NewTask("x", "", "", 1, 9, key)); !d.IsZero() {
+			t.Errorf("key %q gave %v", key, d)
+		}
+	}
+}
