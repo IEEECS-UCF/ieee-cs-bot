@@ -227,6 +227,32 @@ func TestSnapshotCacheRefreshesWhenStale(t *testing.T) {
 	}
 }
 
+// An edited calendar event shows up on the next read even when the cached
+// copy is young; an invalidation during a refresh isn't lost.
+func TestInvalidateRefetchesYoungSnapshot(t *testing.T) {
+	testutil.Setup(t)
+	calls := 0
+	cache := NewSnapshotCache(nil)
+	cache.gather = func(map[string]string, map[int64]bool) (*Snapshot, error) {
+		calls++
+		return NewSnapshot(nil, nil, time.Now()), nil
+	}
+	cache.Get(false)
+	cache.Get(false)
+	if calls != 1 {
+		t.Fatalf("young snapshot refetched: %d", calls)
+	}
+	cache.Invalidate()
+	cache.Get(false)
+	if calls != 2 {
+		t.Errorf("not refetched after Invalidate: %d", calls)
+	}
+	cache.Get(false)
+	if calls != 2 {
+		t.Errorf("refetched again without a new Invalidate: %d", calls)
+	}
+}
+
 func TestASourceThatFailsKeepsItsLastGoodData(t *testing.T) {
 	previous := NewSnapshot(nil, nil, time.Now())
 	previous.VTools["g1"] = &Listing{}

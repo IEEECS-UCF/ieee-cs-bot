@@ -150,6 +150,7 @@ func (a *Ask) setRoom(eventID, room, status string) (string, error) {
 				if err := PatchEvent(eventID, &calendar.Event{Location: room}); err != nil {
 					return "", err
 				}
+				a.eventsChanged()
 				a.syncSoon()
 				return fmt.Sprintf("Room for %s confirmed as %s; the calendar is updated and Discord follows shortly.", e.Name, room), nil
 			}
@@ -204,6 +205,7 @@ func (a *Ask) editEvent(eventID string, title, date, tm, description *string) (s
 		if err := PatchEvent(eventID, body); err != nil {
 			return "", err
 		}
+		a.eventsChanged()
 		a.syncSoon()
 		return fmt.Sprintf("Updated %s: %s. Discord follows shortly.", e.Name, list), nil
 	})
@@ -284,6 +286,7 @@ func (a *Ask) createEvent(title, date, tm, room, roomStatus, description string)
 				return "", err
 			}
 		}
+		a.eventsChanged()
 		a.syncSoon()
 		return fmt.Sprintf("Created %s (%s) on the calendar. The Discord event follows %s.", title, when,
 			strings.TrimSuffix(follows, " of Confirm")), nil
@@ -387,6 +390,15 @@ func (a *Ask) sendForReview(text, eventID string) (string, error) {
 		}
 		return fmt.Sprintf("Sent the %s for review: %s", strings.ReplaceAll(label, "**", ""), linkOrWhy), nil
 	})
+}
+
+// eventsChanged tells the event cache a calendar event was edited or added,
+// so the next announcement draft or event lookup reads it again instead of
+// using a copy up to ten minutes old.
+func (a *Ask) eventsChanged() {
+	if c, ok := a.Events.(interface{ Invalidate() }); ok && c != nil {
+		c.Invalidate()
+	}
 }
 
 func (a *Ask) syncSoon() {

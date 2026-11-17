@@ -799,6 +799,9 @@ type SnapshotCache struct {
 	// which was read before them.
 	replay []func(*Snapshot)
 	busy   bool
+	// outdated is set when something changed outside the bot's view (a calendar
+	// edit); the next Get refetches even if the snapshot is young.
+	outdated bool
 }
 
 func NewSnapshotCache(b *botkit.Bot) *SnapshotCache {
@@ -831,13 +834,17 @@ func (c *SnapshotCache) Get(fresh bool) (*Snapshot, error) {
 	c.fetching.Lock()
 	defer c.fetching.Unlock()
 	current := c.Current()
-	stale := current == nil || fresh || time.Since(current.FetchedAt).Seconds() > CacheSeconds
+	c.mu.Lock()
+	outdated := c.outdated
+	c.mu.Unlock()
+	stale := current == nil || fresh || outdated || time.Since(current.FetchedAt).Seconds() > CacheSeconds
 	if !stale {
 		return current, nil
 	}
 	ids, sent := c.discordLinks()
 	c.mu.Lock()
-	c.busy, c.replay = true, nil
+	// Cleared before the fetch, so an Invalidate during it still counts
+	c.busy, c.replay, c.outdated = true, nil, false
 	c.mu.Unlock()
 	snap, err := c.gather(ids, sent)
 	c.mu.Lock()
@@ -845,6 +852,7 @@ func (c *SnapshotCache) Get(fresh bool) (*Snapshot, error) {
 	replay := c.replay
 	c.busy, c.replay = false, nil
 	if err != nil {
+		c.outdated = true // nothing was read, so try again next time
 		return nil, err
 	}
 	KeepLastGood(snap, current)
@@ -882,6 +890,15 @@ func KeepLastGood(snap, previous *Snapshot) {
 		}
 	}
 	snap.Missing = missing
+}
+
+// Invalidate makes the next Get refetch, for when an event was edited
+// (a new Flyer line, say) and the cached copy would otherwise be up to
+// CacheSeconds behind.
+func (c *SnapshotCache) Invalidate() {
+	c.mu.Lock()
+	c.outdated = true
+	c.mu.Unlock()
 }
 
 // Current is the cached snapshot without refreshing it (nil before the first fetch).
