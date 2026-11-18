@@ -33,7 +33,9 @@ type Bot struct {
 	ready     chan struct{}
 	arriving  map[string]bool // guilds Ready said are on their way (GUILD_CREATE pending)
 	stop      chan struct{}
+	stopping  bool
 	loops     sync.WaitGroup
+	work      sync.WaitGroup
 	alertSend func(channelID, text string) error // tests replace how alerts are posted
 }
 
@@ -224,14 +226,42 @@ func (b *Bot) Open() error {
 	return nil
 }
 
-// Close stops the loops and disconnects.
+// TrackWait is how long Close waits for tracked work.
+var TrackWait = 30 * time.Second
+
+// Track registers work the stop must wait for (a mail group edit, which
+// would leave a group with no routing if cut off between its delete and
+// create). call done when it finishes. ok is false once the stop started:
+// refuse the command instead of starting the work.
+func (b *Bot) Track() (done func(), ok bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.stopping {
+		return nil, false
+	}
+	b.work.Add(1)
+	return func() { b.work.Done() }, true
+}
+
+// Close stops the loops, waits for tracked work and disconnects.
 func (b *Bot) Close() {
+	b.mu.Lock()
+	b.stopping = true
+	b.mu.Unlock()
 	close(b.stop)
-	done := make(chan struct{})
-	go func() { b.loops.Wait(); close(done) }()
+	loopsDone := make(chan struct{})
+	go func() { b.loops.Wait(); close(loopsDone) }()
+	workDone := make(chan struct{})
+	go func() { b.work.Wait(); close(workDone) }()
+	// both timers run from now, so the stop takes at most max(10s, TrackWait)
+	loopsLimit, workLimit := time.After(10*time.Second), time.After(TrackWait)
 	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
+	case <-loopsDone:
+	case <-loopsLimit:
+	}
+	select {
+	case <-workDone:
+	case <-workLimit:
 	}
 	b.S.Close()
 }

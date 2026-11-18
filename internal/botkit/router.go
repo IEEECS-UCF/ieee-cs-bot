@@ -99,6 +99,12 @@ func (b *Bot) runAutocomplete(c *Ctx) {
 	}
 }
 
+// RunCommand handles a slash command as if Discord sent it (tests).
+func (b *Bot) RunCommand(c *Ctx) { b.runCommand(c) }
+
+// RunAutocomplete handles an autocomplete request as if Discord sent it (tests).
+func (b *Bot) RunAutocomplete(c *Ctx) { b.runAutocomplete(c) }
+
 // RunComponent handles a button press or modal submit as if Discord sent it (tests).
 func (b *Bot) RunComponent(c *Ctx) { b.runComponent(c) }
 

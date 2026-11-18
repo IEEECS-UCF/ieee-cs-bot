@@ -18,6 +18,7 @@ import (
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/events"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/general"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/jobfeed"
+	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/mail"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/members"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/officer"
 	"github.com/IEEECS-UCF/ieee-cs-bot/internal/cogs/reminders"
@@ -37,6 +38,7 @@ var cogs = []func(*botkit.Bot){
 	events.Setup,
 	assistant.Setup,
 	officer.Setup,
+	mail.Setup,
 }
 
 func main() {
