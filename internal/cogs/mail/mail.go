@@ -230,8 +230,11 @@ func command(domain string) *discordgo.ApplicationCommand {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionString,
 			Name: "user", Description: "The account.", Required: true, Autocomplete: true}
 	}
+	// admins only by default, like /officer: the server's Integrations settings
+	// allow the mail roles. allowed still checks the roles itself.
+	adminsOnly := int64(0)
 	return &discordgo.ApplicationCommand{
-		Name: "mail", Description: "Manage " + domain + " mail.",
+		Name: "mail", Description: "Manage " + domain + " mail.", DefaultMemberPermissions: &adminsOnly,
 		Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionSubCommandGroup, Name: "user",
 				Description: "Accounts on " + domain + ".",
@@ -241,11 +244,11 @@ func command(domain string) *discordgo.ApplicationCommand {
 						option("last", "Their last name.", true),
 						option("reset-email", "Another email, for password resets.", true),
 						option("username", "The account name, (default: first letter + last name).", false),
-						option("reset-desc", "Public label of the recovery email, this is visible on the password reset page to anyone. (default: recovery email).", false),
+						option("reset-desc", "Label shown to anyone on the reset page (default: recovery email).", false),
 						&discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionString,
 							Name: "group", Description: "Add the new account to this group.", Autocomplete: true},
 						notify),
-					sub("lock", "Completely disable someone from signing into an account by randomizing the password & disabling reset.",
+					sub("lock", "Stop sign-in: randomize the password and turn password reset off.",
 						mailbox(), notify),
 					sub("unlock", "Re-enable an account. Requires a password reset.",
 						mailbox(), notify),
