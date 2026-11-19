@@ -271,13 +271,20 @@ func TestAFailedTurnCantBeContinued(t *testing.T) {
 	}
 }
 
-func TestWebToolsOnlyReachTheChaptersSites(t *testing.T) {
+func TestWebToolsReachAnySite(t *testing.T) {
 	raw, _ := json.Marshal(Tools)
-	for _, want := range []string{`"type":"web_search_20260209"`, `"type":"web_fetch_20260209"`,
-		`"allowed_domains":["computer.org","ieee.org","ucf.edu"]`} {
+	for _, want := range []string{`"type":"web_search_20260209"`, `"type":"web_fetch_20260209"`, `"max_uses":5`} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("tools missing %s", want)
 		}
+	}
+	for _, limit := range []string{"allowed_domains", "blocked_domains"} {
+		if strings.Contains(string(raw), limit) {
+			t.Errorf("the web tools are limited by %s", limit)
+		}
+	}
+	if strings.Contains(System, "reach only") {
+		t.Error("the instructions still say the web tools reach only some sites")
 	}
 }
 
