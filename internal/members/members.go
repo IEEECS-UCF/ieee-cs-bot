@@ -64,7 +64,10 @@ func (r *Record) NumberText() string {
 	return *r.Number
 }
 
-// NormalizeNumber pads IEEE member numbers to 8 digits; "" if it isn't one.
+// NormalizeNumber is an IEEE member number with spaces taken out, or "" if
+// it isn't one. Numbers were 8 digits until IEEE started issuing 9-digit ones
+// in 2026, so 9 digits are kept as typed and anything shorter is padded back to
+// 8 (an old number written without its leading zeros).
 func NormalizeNumber(text string) string {
 	var digits strings.Builder
 	for _, c := range text {
@@ -73,8 +76,11 @@ func NormalizeNumber(text string) string {
 		}
 	}
 	d := digits.String()
-	if d == "" || len(d) > 8 || len(d) != len(strings.ReplaceAll(strings.TrimSpace(text), " ", "")) {
+	if d == "" || len(d) > 9 || len(d) != len(strings.ReplaceAll(strings.TrimSpace(text), " ", "")) {
 		return ""
+	}
+	if len(d) == 9 {
+		return d
 	}
 	return strings.Repeat("0", 8-len(d)) + d
 }

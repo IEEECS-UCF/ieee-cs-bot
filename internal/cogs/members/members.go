@@ -243,7 +243,7 @@ func (c *Cog) verifyModal(pending *members.Record) *botkit.Modal {
 		}
 	}
 	return c.b.NewModal(title, []botkit.TextInput{
-		{ID: "number", Label: "IEEE member number", Placeholder: "8 digits, on your IEEE account page", Value: number, MinLength: 1, MaxLength: 12},
+		{ID: "number", Label: "IEEE member number", Placeholder: "8 or 9 digits, on your IEEE account page", Value: number, MinLength: 1, MaxLength: 12},
 		{ID: "email", Label: "Email on your IEEE account (optional)", Value: email, Optional: true, MaxLength: 120},
 	}, func(ctx *botkit.Ctx) { c.onVerify(live{ctx}) })
 }
@@ -251,7 +251,7 @@ func (c *Cog) verifyModal(pending *members.Record) *botkit.Modal {
 func (c *Cog) onVerify(ix interaction) {
 	number := members.NormalizeNumber(ix.Field("number"))
 	if number == "" {
-		ix.Ephemeral("That doesn't look like an IEEE member number (up to 8 digits). Try again with `/member verify`.")
+		ix.Ephemeral("That doesn't look like an IEEE member number (8 or 9 digits). Try again with `/member verify`.")
 		return
 	}
 	userID := botkit.ID(ix.User().ID)

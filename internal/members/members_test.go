@@ -9,13 +9,14 @@ import (
 
 var day = time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)
 
-func TestNumbersArePaddedToEightDigits(t *testing.T) {
-	for in, want := range map[string]string{"12345678": "12345678", " 1234567 ": "01234567", "1234 5678": "12345678"} {
+func TestNumbersArePaddedToEightDigitsAndNineDigitOnesKept(t *testing.T) {
+	for in, want := range map[string]string{"12345678": "12345678", " 1234567 ": "01234567", "1234 5678": "12345678",
+		"123456789": "123456789", "012345678": "012345678", " 123 456 789 ": "123456789"} {
 		if got := NormalizeNumber(in); got != want {
 			t.Errorf("%q -> %q", in, got)
 		}
 	}
-	for _, bad := range []string{"", "abc", "123456789", "12-345678", "1234567a"} {
+	for _, bad := range []string{"", "abc", "1234567890", "12-345678", "1234567a"} {
 		if got := NormalizeNumber(bad); got != "" {
 			t.Errorf("%q -> %q", bad, got)
 		}
