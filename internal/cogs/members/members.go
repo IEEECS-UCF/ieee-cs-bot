@@ -23,6 +23,16 @@ import (
 
 var DuesPayingRoleID = botkit.ID(botkit.Env("DUES_PAYING_ROLE_ID", "1428785815789768704"))
 
+// MemberChatChannelID is the national members' chat, which the approval DM
+// points new members to.
+var MemberChatChannelID = botkit.Env("MEMBER_CHAT_CHANNEL_ID", "1428786455928377394")
+
+// approvedText is the DM a member gets when an officer approves them.
+func approvedText(year int) string {
+	return fmt.Sprintf("✅ Your IEEE membership is verified for %d! You now have the **Dues Paying** role in IEEE CS at UCF. "+
+		"Come check out the national member chat: <#%s>", year, MemberChatChannelID)
+}
+
 func hasRole(m *discordgo.Member) bool {
 	if m == nil {
 		return false
@@ -110,6 +120,7 @@ type Cog struct {
 	reviewChannel func() string
 	postCard      func(channelID string, embed *discordgo.MessageEmbed, view []discordgo.MessageComponent) (*discordgo.Message, error)
 	editCard      func(card *members.Card, embed *discordgo.MessageEmbed) error
+	dm            func(userID int64, text string) error // a direct message
 
 	mu     sync.Mutex
 	chunks map[string]*chunkCount // guild -> member chunks seen at startup
@@ -150,6 +161,14 @@ func newCog(b *botkit.Bot) *Cog {
 		embeds := []*discordgo.MessageEmbed{embed}
 		_, err := b.S.ChannelMessageEditComplex(&discordgo.MessageEdit{
 			Channel: botkit.S(card.Channel), ID: botkit.S(card.Message), Embeds: &embeds})
+		return err
+	}
+	c.dm = func(userID int64, text string) error {
+		ch, err := b.S.UserChannelCreate(botkit.S(userID))
+		if err != nil {
+			return err
+		}
+		_, err = b.S.ChannelMessageSendComplex(ch.ID, &discordgo.MessageSend{Content: text, AllowedMentions: botkit.NoMentions()})
 		return err
 	}
 	return c
@@ -221,6 +240,13 @@ func (c *Cog) onReview(ix interaction, action string, userID int64) {
 		members.Change(userID, func(*members.Record) *members.Record { return &before })
 		ix.Ephemeral(fmt.Sprintf("Couldn't give the role (%s). Nothing was changed.", httpText(err)))
 		return
+	}
+	if note == "" {
+		// Tell them, and where the members' chat is. Their DMs may be closed; that
+		// doesn't undo anything, it just goes in the officer's note.
+		if err := c.dm(userID, approvedText(record.Year)); err != nil {
+			note = fmt.Sprintf(" Couldn't DM them about it (%s); they may have DMs turned off.", httpText(err))
+		}
 	}
 	ix.Update(botkit.Edit{Embeds: &[]*discordgo.MessageEmbed{reviewEmbed(userID, record)},
 		Components: botkit.Clear[discordgo.MessageComponent]()})

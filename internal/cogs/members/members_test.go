@@ -59,6 +59,8 @@ type fakeDiscord struct {
 	member *discordgo.Member
 	added  []int64
 	cards  []string
+	dms    []string
+	dmErr  error
 }
 
 func testCog(t *testing.T) (*Cog, *fakeDiscord) {
@@ -76,6 +78,13 @@ func testCog(t *testing.T) (*Cog, *fakeDiscord) {
 		return nil
 	}
 	c.reviewChannel = func() string { return "" }
+	c.dm = func(_ int64, text string) error {
+		if fake.dmErr != nil {
+			return fake.dmErr
+		}
+		fake.dms = append(fake.dms, text)
+		return nil
+	}
 	c.postCard = func(channel string, e *discordgo.MessageEmbed, _ []discordgo.MessageComponent) (*discordgo.Message, error) {
 		fake.cards = append(fake.cards, e.Description)
 		return &discordgo.Message{ID: "6", ChannelID: channel}, nil
@@ -340,5 +349,30 @@ func TestSubmittingAfterApprovalChangesNothing(t *testing.T) {
 	if r := members.Get(70); r.Status != "verified" || r.NumberText() != "01234567" || len(fake.cards) != 0 ||
 		!strings.HasPrefix(ix.sent, "You're already verified") {
 		t.Errorf("%+v %q", r, ix.sent)
+	}
+}
+
+func TestApprovalDMsThemAboutTheMemberChat(t *testing.T) {
+	c, fake := testCog(t)
+	members.Submit(10, "123456789", "", day)
+	fake.member = &discordgo.Member{User: &discordgo.User{ID: "10"}}
+	c.onReview(interactionWith(officer), "approve", 10)
+	if len(fake.dms) != 1 || !strings.Contains(fake.dms[0], "<#"+MemberChatChannelID+">") || !strings.Contains(fake.dms[0], "Dues Paying") {
+		t.Errorf("dms %q", fake.dms)
+	}
+}
+
+func TestApprovalStillWorksWhenTheirDMsAreClosed(t *testing.T) {
+	c, fake := testCog(t)
+	members.Submit(10, "00000001", "", day)
+	fake.member = &discordgo.Member{User: &discordgo.User{ID: "10"}}
+	fake.dmErr = errors.New("403 Forbidden")
+	ix := interactionWith(officer)
+	c.onReview(ix, "approve", 10)
+	if members.Get(10).Status != "verified" || len(fake.added) != 1 {
+		t.Errorf("approval was undone: %+v %v", members.Get(10), fake.added)
+	}
+	if len(ix.sends) != 1 || !strings.Contains(ix.sends[0], "Couldn't DM them") {
+		t.Errorf("officer wasn't told: %q", ix.sends)
 	}
 }
